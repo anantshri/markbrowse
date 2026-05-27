@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"time"
 	"log"
 	"net/http"
 	"os"
@@ -49,15 +50,22 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%d", *port)
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      h,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 	log.Printf("mdview serving %s on http://localhost%s", rootDir, addr)
-	log.Fatal(http.ListenAndServe(addr, h))
+	log.Fatal(srv.ListenAndServe())
 }
 
 func loadCustomCSS(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from user's -css flag
 	if err != nil {
 		return "", fmt.Errorf("reading custom CSS: %w", err)
 	}

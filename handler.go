@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -31,14 +32,14 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if relPath == "/__mdview/mermaid.js" {
 		w.Header().Set("Content-Type", "application/javascript")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
-		w.Write(mermaidJS)
+		_, _ = w.Write(mermaidJS)
 		return
 	}
 
 	if relPath == "/__mdview/sidebar.js" {
 		w.Header().Set("Content-Type", "application/javascript")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
-		w.Write(sidebarJS)
+		_, _ = w.Write(sidebarJS)
 		return
 	}
 
@@ -55,7 +56,7 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if info.IsDir() {
 		if !strings.HasSuffix(r.URL.Path, "/") {
-			http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
+			http.Redirect(w, r, relPath+"/", http.StatusMovedPermanently) // #nosec G710 -- relPath is path.Clean'd, always starts with /
 			return
 		}
 		h.serveDirectory(w, r, fsPath, relPath)
@@ -67,7 +68,7 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(fsPath)
+	f, err := os.Open(fsPath) // #nosec G304 -- fsPath validated against h.root above
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -130,11 +131,13 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	dirTmpl.Execute(w, data)
+	if err := dirTmpl.Execute(w, data); err != nil {
+		log.Printf("dir template error: %v", err)
+	}
 }
 
 func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
-	source, err := os.ReadFile(fsPath)
+	source, err := os.ReadFile(fsPath) // #nosec G304 -- fsPath validated against h.root in ServeHTTP
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -158,21 +161,23 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 	data := pageData{
 		Title:       title,
 		CSS:         h.css(),
-		Body:        template.HTML(body),
+		Body:        template.HTML(body), // #nosec G203 -- goldmark output is trusted
 		Breadcrumbs: buildBreadcrumbs(relPath),
 		HasMermaid:  strings.Contains(body, `class="mermaid"`),
 		CurrentPath: relPath,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	mdTmpl.Execute(w, data)
+	if err := mdTmpl.Execute(w, data); err != nil {
+		log.Printf("md template error: %v", err)
+	}
 }
 
 func (h *fileHandler) css() template.CSS {
 	if h.customCSS != "" {
-		return template.CSS(h.customCSS)
+		return template.CSS(h.customCSS) // #nosec G203 -- user-supplied CSS is intentional
 	}
-	return template.CSS(defaultCSS)
+	return template.CSS(defaultCSS) // #nosec G203 -- hardcoded CSS is safe
 }
 
 func buildBreadcrumbs(relPath string) []breadcrumb {
@@ -220,7 +225,7 @@ func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
 		Path:  "/",
 		IsDir: true,
 	}
-	filepath.WalkDir(h.root, func(walkPath string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(h.root, func(walkPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -241,12 +246,16 @@ func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
 		segments := strings.Split(filepath.ToSlash(rel), "/")
 		insertIntoTree(&root, segments, urlPath, d.IsDir())
 		return nil
-	})
+	}); err != nil {
+		log.Printf("tree walk error: %v", err)
+	}
 	pruneEmptyDirs(&root)
 	sortTree(&root)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(root)
+	if err := json.NewEncoder(w).Encode(root); err != nil {
+		log.Printf("tree json encode error: %v", err)
+	}
 }
 
 func insertIntoTree(root *treeEntry, segments []string, urlPath string, isDir bool) {

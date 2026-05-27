@@ -76,7 +76,7 @@ func buildFileIndex(rootDir string) fileIndex {
 		idx[strings.ToLower(d.Name())] = urlPath
 
 		return nil
-	})
+	}) // #nosec G104 -- best-effort index, errors handled in walk func
 	return idx
 }
 
