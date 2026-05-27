@@ -1,0 +1,20 @@
+# Binaries
+mdview
+/mdview
+
+# Plans (out of scope)
+plans/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
