@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -30,6 +32,18 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write(mermaidJS)
+		return
+	}
+
+	if relPath == "/__mdview/sidebar.js" {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(sidebarJS)
+		return
+	}
+
+	if relPath == "/__mdview/tree.json" {
+		h.serveTreeJSON(w, r)
 		return
 	}
 
@@ -107,11 +121,12 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 	}
 
 	data := dirData{
-		Path:       relPath,
-		CSS:        h.css(),
-		HasParent:  relPath != "/",
-		ParentPath: path.Dir(relPath) + "/",
-		Entries:    dirEntries,
+		Path:        relPath,
+		CSS:         h.css(),
+		HasParent:   relPath != "/",
+		ParentPath:  path.Dir(relPath) + "/",
+		Entries:     dirEntries,
+		CurrentPath: relPath + "/",
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -146,6 +161,7 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 		Body:        template.HTML(body),
 		Breadcrumbs: buildBreadcrumbs(relPath),
 		HasMermaid:  strings.Contains(body, `class="mermaid"`),
+		CurrentPath: relPath,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -188,5 +204,103 @@ func formatSize(b int64) string {
 		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
 	default:
 		return fmt.Sprintf("%d B", b)
+	}
+}
+
+type treeEntry struct {
+	Name     string      `json:"name"`
+	Path     string      `json:"path"`
+	IsDir    bool        `json:"isDir,omitempty"`
+	Children []treeEntry `json:"children,omitempty"`
+}
+
+func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
+	root := treeEntry{
+		Name:  filepath.Base(h.root),
+		Path:  "/",
+		IsDir: true,
+	}
+	filepath.WalkDir(h.root, func(walkPath string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+			return nil
+		}
+		rel, err := filepath.Rel(h.root, walkPath)
+		if err != nil {
+			return nil
+		}
+		urlPath := "/" + filepath.ToSlash(rel)
+		if d.IsDir() {
+			urlPath += "/"
+		}
+		segments := strings.Split(filepath.ToSlash(rel), "/")
+		insertIntoTree(&root, segments, urlPath, d.IsDir())
+		return nil
+	})
+	pruneEmptyDirs(&root)
+	sortTree(&root)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(root)
+}
+
+func insertIntoTree(root *treeEntry, segments []string, urlPath string, isDir bool) {
+	current := root
+	for i, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		found := false
+		for j := range current.Children {
+			if current.Children[j].Name == seg {
+				current = &current.Children[j]
+				found = true
+				break
+			}
+		}
+		if !found {
+			childPath := "/" + strings.Join(segments[:i+1], "/")
+			if isDir || i < len(segments)-1 {
+				childPath += "/"
+			}
+			child := treeEntry{
+				Name:  seg,
+				Path:  childPath,
+				IsDir: isDir || i < len(segments)-1,
+			}
+			current.Children = append(current.Children, child)
+			current = &current.Children[len(current.Children)-1]
+		}
+	}
+}
+
+func pruneEmptyDirs(node *treeEntry) {
+	var kept []treeEntry
+	for i := range node.Children {
+		if node.Children[i].IsDir {
+			pruneEmptyDirs(&node.Children[i])
+			if len(node.Children[i].Children) == 0 {
+				continue
+			}
+		}
+		kept = append(kept, node.Children[i])
+	}
+	node.Children = kept
+}
+
+func sortTree(node *treeEntry) {
+	sort.Slice(node.Children, func(i, j int) bool {
+		if node.Children[i].IsDir != node.Children[j].IsDir {
+			return node.Children[i].IsDir
+		}
+		return node.Children[i].Name < node.Children[j].Name
+	})
+	for i := range node.Children {
+		sortTree(&node.Children[i])
 	}
 }

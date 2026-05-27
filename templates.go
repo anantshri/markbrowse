@@ -15,6 +15,7 @@ type pageData struct {
 	Body        template.HTML
 	Breadcrumbs []breadcrumb
 	HasMermaid  bool
+	CurrentPath string
 }
 
 type entryInfo struct {
@@ -26,11 +27,12 @@ type entryInfo struct {
 }
 
 type dirData struct {
-	Path       string
-	CSS        template.CSS
-	HasParent  bool
-	ParentPath string
-	Entries    []entryInfo
+	Path        string
+	CSS         template.CSS
+	HasParent   bool
+	ParentPath  string
+	Entries     []entryInfo
+	CurrentPath string
 }
 
 var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
@@ -41,7 +43,15 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 <title>{{.Title}}</title>
 <style>{{.CSS}}</style>
 </head>
-<body>
+<body data-current-path="{{.CurrentPath}}">
+<div class="sidebar-overlay"></div>
+<div class="mdview-layout">
+<aside class="mdview-sidebar">
+<div class="sidebar-header">Files</div>
+<div id="tree-root"></div>
+</aside>
+<main class="mdview-main">
+<button id="sidebar-toggle" title="Toggle sidebar">&#9776;</button>
 <div class="mdview-container">
 <nav class="mdview-breadcrumb">
 <a href="/">root</a>
@@ -53,6 +63,9 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 {{if .HasMermaid}}<script src="/__mdview/mermaid.js"></script>
 <script>mermaid.initialize({startOnLoad:false,theme:"default"});mermaid.run();</script>{{end}}
 </div>
+</main>
+</div>
+<script src="/__mdview/sidebar.js"></script>
 </body>
 </html>`))
 
@@ -64,7 +77,15 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 <title>Index of {{.Path}}</title>
 <style>{{.CSS}}</style>
 </head>
-<body>
+<body data-current-path="{{.CurrentPath}}">
+<div class="sidebar-overlay"></div>
+<div class="mdview-layout">
+<aside class="mdview-sidebar">
+<div class="sidebar-header">Files</div>
+<div id="tree-root"></div>
+</aside>
+<main class="mdview-main">
+<button id="sidebar-toggle" title="Toggle sidebar">&#9776;</button>
 <div class="mdview-container">
 <h1 style="margin-top:0">Index of {{.Path}}</h1>
 <table class="dir-list">
@@ -81,5 +102,8 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 </tbody>
 </table>
 </div>
+</main>
+</div>
+<script src="/__mdview/sidebar.js"></script>
 </body>
 </html>`))
