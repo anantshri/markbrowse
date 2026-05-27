@@ -17,10 +17,28 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.24"
 
       - name: Build
-        run: go build -o mdview .
+        run: go build -ldflags "-X main.version=${{ github.ref_name }}" -o markbrowse .
 
       - name: Vet
         run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Gosec
+        run: gosec ./...

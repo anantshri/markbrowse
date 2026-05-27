@@ -3,17 +3,38 @@ package main
 import (
 	"flag"
 	"fmt"
-	"time"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"time"
 )
+
+var version = "dev"
+
+func getVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" {
+			return v
+		}
+	}
+	return "dev"
+}
 
 func main() {
 	port := flag.Int("port", 8080, "port to listen on")
 	cssPath := flag.String("css", "", "path to custom CSS file (replaces built-in stylesheet)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("markbrowse %s\n", getVersion())
+		os.Exit(0)
+	}
 
 	var rootDir string
 	if args := flag.Args(); len(args) > 0 {
@@ -57,7 +78,7 @@ func main() {
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
-	log.Printf("mdview serving %s on http://localhost%s", rootDir, addr)
+	log.Printf("markbrowse serving %s on http://localhost%s", rootDir, addr)
 	log.Fatal(srv.ListenAndServe())
 }
 

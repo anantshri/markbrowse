@@ -1,4 +1,4 @@
-module github.com/ion1/mdview
+module github.com/anantshri/markbrowse
 
 go 1.24
 
