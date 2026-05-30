@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,7 +71,12 @@ func main() {
 		customCSS: customCSS,
 	}
 
-	addr := fmt.Sprintf(":%d", *port)
+	listener, actualPort, err := listenWithFallback(*port)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	addr := fmt.Sprintf(":%d", actualPort)
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      h,
@@ -79,7 +85,28 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 	log.Printf("markbrowse serving %s on http://localhost%s", rootDir, addr)
-	log.Fatal(srv.ListenAndServe())
+	log.Fatal(srv.Serve(listener))
+}
+
+func listenWithFallback(port int) (net.Listener, int, error) {
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err == nil {
+		return l, port, nil
+	}
+	log.Printf("error: port %d unavailable: %v", port, err)
+
+	start := port + 1
+	if start < 10000 {
+		start = 10000
+	}
+	for p := start; p <= 65535; p++ {
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err == nil {
+			log.Printf("falling back to port %d", p)
+			return l, p, nil
+		}
+	}
+	return nil, 0, fmt.Errorf("no available 5-digit port found above %d", port)
 }
 
 func loadCustomCSS(path string) (string, error) {
