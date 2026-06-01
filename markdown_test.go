@@ -18,7 +18,7 @@ func TestMarkdownConvert(t *testing.T) {
 		{"heading", "# Hello", "h1"},
 		{"bold", "**bold**", "<strong>bold</strong>"},
 		{"link", "[url](http://example.com)", `<a href="http://example.com">url</a>`},
-		{"callout", "> [!NOTE]\n> hi", "callout-note"},
+		{"callout", "> [!NOTE]\n> hi", "markdown-alert-note"},
 		{"mermaid", "```mermaid\ngraph TD\nA-->B\n```", `class="mermaid"`},
 	}
 
