@@ -46,7 +46,9 @@ markbrowse --port 3000
 markbrowse --css ./my-theme.css
 ```
 
-Open `http://localhost:8080` in your browser.
+Open `http://localhost:8080` in your browser. If the requested port is busy,
+`markbrowse` automatically falls back to the next free port (searching from
+10000 upward) and logs the port it bound to.
 
 ## How it works
 
@@ -74,6 +76,10 @@ Markdown rendering supports GFM features: tables, strikethrough, task lists, aut
 - [goldmark/mermaid](https://go.abhg.dev/goldmark/mermaid) — mermaid diagram support
 - [goldmark/wikilink](https://go.abhg.dev/goldmark/wikilink) — `[[wiki link]]` parsing
 - [gm-alert-callouts](https://github.com/zmtcreative/gm-alert-callouts) — `> [!NOTE]` admonition callouts
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## License
 
