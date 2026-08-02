@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -130,5 +133,37 @@ func TestInsertIntoTree(t *testing.T) {
 	}
 	if len(sub.Children) != 1 || sub.Children[0].Name != "file.md" {
 		t.Errorf("insertIntoTree: sub children = %v, want [file.md]", sub.Children)
+	}
+}
+
+func TestTableSortAssetServed(t *testing.T) {
+	h := &fileHandler{root: t.TempDir()}
+	req := httptest.NewRequest(http.MethodGet, "/__mdview/table-sort.js", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("table-sort.js status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/javascript" {
+		t.Errorf("table-sort.js content-type = %q, want application/javascript", ct)
+	}
+	if len(rec.Body.Bytes()) == 0 {
+		t.Error("table-sort.js body is empty")
+	}
+}
+
+func TestTemplatesIncludeTableSort(t *testing.T) {
+	var md, dir strings.Builder
+	if err := mdTmpl.Execute(&md, pageData{}); err != nil {
+		t.Fatalf("mdTmpl execute: %v", err)
+	}
+	if err := dirTmpl.Execute(&dir, dirData{}); err != nil {
+		t.Fatalf("dirTmpl execute: %v", err)
+	}
+	for name, out := range map[string]string{"mdTmpl": md.String(), "dirTmpl": dir.String()} {
+		if !strings.Contains(out, "/__mdview/table-sort.js") {
+			t.Errorf("%s should include table-sort.js script", name)
+		}
 	}
 }

@@ -66,6 +66,7 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 </main>
 </div>
 <script src="/__mdview/sidebar.js"></script>
+<script src="/__mdview/table-sort.js"></script>
 </body>
 </html>`))
 
@@ -91,7 +92,7 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 <table class="dir-list">
 <thead><tr><th>Name</th><th class="size">Size</th><th class="modified">Modified</th></tr></thead>
 <tbody>
-{{if .HasParent}}<tr><td><a href="{{.ParentPath}}">../</a></td><td class="size">&mdash;</td><td class="modified">&mdash;</td></tr>{{end}}
+{{if .HasParent}}<tr class="dir-parent"><td><a href="{{.ParentPath}}">../</a></td><td class="size">&mdash;</td><td class="modified">&mdash;</td></tr>{{end}}
 {{range .Entries}}
 <tr>
 <td><a href="{{.URL}}">{{if .IsDir}}&#128193; {{end}}{{.Name}}{{if .IsDir}}/{{end}}</a></td>
@@ -105,5 +106,6 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 </main>
 </div>
 <script src="/__mdview/sidebar.js"></script>
+<script src="/__mdview/table-sort.js"></script>
 </body>
 </html>`))

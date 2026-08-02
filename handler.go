@@ -43,6 +43,13 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if relPath == "/__mdview/table-sort.js" {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(tableSortJS)
+		return
+	}
+
 	if relPath == "/__mdview/tree.json" {
 		h.serveTreeJSON(w, r)
 		return
