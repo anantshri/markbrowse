@@ -50,6 +50,10 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	info, err := os.Stat(fsPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -70,6 +74,10 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	f, err := os.Open(fsPath) // #nosec G304 -- fsPath validated against h.root above
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -88,6 +96,10 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 
 	entries, err := os.ReadDir(fsPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -139,6 +151,10 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
 	source, err := os.ReadFile(fsPath) // #nosec G304 -- fsPath validated against h.root in ServeHTTP
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}

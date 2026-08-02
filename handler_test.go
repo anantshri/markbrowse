@@ -1,6 +1,10 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -130,5 +134,24 @@ func TestInsertIntoTree(t *testing.T) {
 	}
 	if len(sub.Children) != 1 || sub.Children[0].Name != "file.md" {
 		t.Errorf("insertIntoTree: sub children = %v, want [file.md]", sub.Children)
+	}
+}
+
+func TestServeHTTPForbiddenOnUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret.md")
+	if err := os.WriteFile(secret, []byte("# s"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Ensure cleanup can still remove the file.
+	defer os.Chmod(secret, 0o644)
+
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+	req := httptest.NewRequest(http.MethodGet, "/secret.md", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("ServeHTTP unreadable file = %d, want 403", rec.Code)
 	}
 }

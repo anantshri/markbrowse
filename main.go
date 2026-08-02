@@ -59,6 +59,9 @@ func main() {
 	if !info.IsDir() {
 		log.Fatalf("%s is not a directory", rootDir)
 	}
+	if err := validateReadable(rootDir); err != nil {
+		log.Fatalf("cannot serve %s: %v", rootDir, err)
+	}
 
 	customCSS, err := loadCustomCSS(*cssPath)
 	if err != nil {
@@ -118,4 +121,42 @@ func loadCustomCSS(path string) (string, error) {
 		return "", fmt.Errorf("reading custom CSS: %w", err)
 	}
 	return string(data), nil
+}
+
+// validateReadable confirms the root directory can actually be read before the
+// server starts, so permission problems fail fast with a clear message instead
+// of surfacing as per-request errors. It checks the directory itself and, when
+// present, a README/index file so the most common serve path is verified.
+func validateReadable(rootDir string) error {
+	entries, err := os.ReadDir(rootDir)
+	if err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("permission denied reading directory (check read+execute permissions): %w", err)
+		}
+		return fmt.Errorf("reading directory: %w", err)
+	}
+	for _, name := range []string{"README.md", "readme.md", "INDEX.md", "index.md"} {
+		indexPath := filepath.Join(rootDir, name)
+		if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
+			data, err := os.ReadFile(indexPath) // #nosec G304 -- fixed candidate index name
+			if err != nil {
+				if os.IsPermission(err) {
+					return fmt.Errorf("permission denied reading %s: %w", name, err)
+				}
+				return fmt.Errorf("reading %s: %w", name, err)
+			}
+			_ = data
+			return nil
+		}
+	}
+	// No index file: verify at least the first entry can be inspected.
+	if len(entries) > 0 {
+		if _, err := entries[0].Info(); err != nil {
+			if os.IsPermission(err) {
+				return fmt.Errorf("permission denied accessing %q: %w", entries[0].Name(), err)
+			}
+			return fmt.Errorf("accessing %q: %w", entries[0].Name(), err)
+		}
+	}
+	return nil
 }
