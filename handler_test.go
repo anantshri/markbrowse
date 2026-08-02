@@ -1,8 +1,51 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestServeTreeIncludesDotDirs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".hidden"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".hidden", "secret.md"), []byte("# s"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "top.md"), []byte("# t"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &fileHandler{root: dir}
+	req := httptest.NewRequest(http.MethodGet, "/__mdview/tree.json", nil)
+	rec := httptest.NewRecorder()
+	h.serveTreeJSON(rec, req)
+
+	var root treeEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+		t.Fatalf("unmarshal tree: %v", err)
+	}
+	found := false
+	for _, c := range root.Children {
+		if c.Name == ".hidden" {
+			found = true
+			if !c.IsDir {
+				t.Error(".hidden should be a directory")
+			}
+			if len(c.Children) != 1 || c.Children[0].Name != "secret.md" {
+				t.Errorf(".hidden children = %v, want [secret.md]", c.Children)
+			}
+		}
+	}
+	if !found {
+		t.Error("tree should include dot directory .hidden")
+	}
+}
 
 func TestFormatSize(t *testing.T) {
 	tests := []struct {

@@ -229,9 +229,8 @@ func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
+		// Dot directories are intentionally included so they appear in the
+		// sidebar (e.g. .obsidian vaults); only non-markdown files are skipped.
 		if !d.IsDir() && !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
 			return nil
 		}
