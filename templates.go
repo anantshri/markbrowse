@@ -66,6 +66,7 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 </main>
 </div>
 <script src="/__mdview/sidebar.js"></script>
+<script src="/__mdview/tablesort.js"></script>
 </body>
 </html>`))
 
@@ -105,5 +106,6 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 </main>
 </div>
 <script src="/__mdview/sidebar.js"></script>
+<script src="/__mdview/tablesort.js"></script>
 </body>
 </html>`))
