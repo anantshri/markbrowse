@@ -1,7 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestFormatSize(t *testing.T) {
@@ -130,5 +137,64 @@ func TestInsertIntoTree(t *testing.T) {
 	}
 	if len(sub.Children) != 1 || sub.Children[0].Name != "file.md" {
 		t.Errorf("insertIntoTree: sub children = %v, want [file.md]", sub.Children)
+	}
+}
+
+func TestTreeJSONCachedRebuildsAfterTTL(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte("# a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &fileHandler{root: dir}
+
+	first := h.treeJSONCached()
+	if first == nil || !strings.Contains(string(first), "a.md") {
+		t.Fatalf("first tree missing a.md: %s", first)
+	}
+
+	// A second call inside the TTL must return the cached bytes (no rebuild).
+	again := h.treeJSONCached()
+	if !bytes.Equal(first, again) {
+		t.Fatal("cached tree should be identical within TTL")
+	}
+
+	// Add a file, then force expiry and confirm the tree is rebuilt.
+	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte("# b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.treeAt = time.Now().Add(-treeCacheTTL - time.Second)
+	rebuilt := h.treeJSONCached()
+	if !strings.Contains(string(rebuilt), "b.md") {
+		t.Fatalf("rebuilt tree missing b.md: %s", rebuilt)
+	}
+}
+
+func TestServeMarkdownETagNotModified(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.md"), []byte("# Doc\n\ncontent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+
+	req := httptest.NewRequest(http.MethodGet, "/doc.md", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first request = %d, want 200", rec.Code)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("first response should carry an ETag")
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/doc.md", nil)
+	req2.Header.Set("If-None-Match", etag)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNotModified {
+		t.Fatalf("conditional request = %d, want 304", rec2.Code)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Errorf("304 response should have empty body, got %d bytes", rec2.Body.Len())
 	}
 }

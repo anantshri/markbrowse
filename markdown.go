@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	alerts "github.com/thiagokokada/goldmark-gh-alerts"
 	ghsummary "github.com/thiagokokada/goldmark-gh-alerts/summary"
@@ -32,15 +33,13 @@ type markdownConverter struct {
 }
 
 func newMarkdownConverter(rootDir string) *markdownConverter {
-	idx := buildFileIndex(rootDir)
-
 	gm := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,
 			&mermaid.Extender{NoScript: true},
 			&alerts.GhAlerts{Icons: alertIcons},
 			&wikilink.Extender{
-				Resolver: &wikilinkResolver{idx: idx},
+				Resolver: &wikilinkResolver{rootDir: rootDir},
 			},
 		),
 		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
@@ -50,11 +49,20 @@ func newMarkdownConverter(rootDir string) *markdownConverter {
 }
 
 func (m *markdownConverter) convert(source []byte) (string, error) {
-	var buf bytes.Buffer
-	if err := m.gm.Convert(source, &buf); err != nil {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	if err := m.gm.Convert(source, buf); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// bufPool reuses the scratch buffer used for markdown rendering. Rendering is
+// a per-request hot path, so avoiding an allocation on every page view adds
+// up quickly under load.
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
 }
 
 // fileIndex maps lowercase file stems to their URL paths.
@@ -93,19 +101,33 @@ func buildFileIndex(rootDir string) fileIndex {
 }
 
 type wikilinkResolver struct {
-	idx fileIndex
+	rootDir string
+
+	once sync.Once
+	idx  fileIndex
+}
+
+// index returns the file index, building it lazily on first use. The index
+// walks the whole tree, which is expensive on large directories, so it is
+// deferred until a [[wikilink]] actually needs resolution.
+func (r *wikilinkResolver) index() fileIndex {
+	r.once.Do(func() {
+		r.idx = buildFileIndex(r.rootDir)
+	})
+	return r.idx
 }
 
 func (r *wikilinkResolver) ResolveWikilink(n *wikilink.Node) ([]byte, error) {
+	idx := r.index()
 	target := strings.ToLower(string(n.Target))
 
 	// Try stem match first (e.g., "notes" -> "notes.md")
-	if p, ok := r.idx[target]; ok {
+	if p, ok := idx[target]; ok {
 		return r.buildURL(p, n.Fragment), nil
 	}
 
 	// Try with .md extension
-	if p, ok := r.idx[target+".md"]; ok {
+	if p, ok := idx[target+".md"]; ok {
 		return r.buildURL(p, n.Fragment), nil
 	}
 

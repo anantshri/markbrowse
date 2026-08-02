@@ -12,12 +12,18 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 type fileHandler struct {
 	root      string
 	md        *markdownConverter
 	customCSS string
+
+	treeMu   sync.Mutex
+	treeJSON []byte
+	treeAt   time.Time
 }
 
 func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -137,8 +143,31 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 }
 
 func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
+	info, err := os.Stat(fsPath)
+	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// ETag from file identity lets browsers revalidate cheaply and lets us
+	// short-circuit with 304 without re-reading/re-rendering unchanged files.
+	etag := fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size())
+	if match := r.Header.Get("If-None-Match"); match == etag {
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
 	source, err := os.ReadFile(fsPath) // #nosec G304 -- fsPath validated against h.root in ServeHTTP
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -168,6 +197,7 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("ETag", etag)
 	if err := mdTmpl.Execute(w, data); err != nil {
 		log.Printf("md template error: %v", err)
 	}
@@ -219,7 +249,22 @@ type treeEntry struct {
 	Children []treeEntry `json:"children,omitempty"`
 }
 
-func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
+// treeCacheTTL bounds how long the sidebar tree stays cached. The tree can
+// change as files are added/removed on disk, so it is rebuilt after this
+// window instead of holding a stale snapshot forever.
+const treeCacheTTL = 5 * time.Second
+
+// treeJSONCached returns the serialized file tree, rebuilding it at most
+// once per treeCacheTTL. The walk, prune and sort are the most expensive
+// work the server does on every page load, so caching avoids repeating it
+// for rapid successive requests (e.g. the sidebar fetching on each page).
+func (h *fileHandler) treeJSONCached() []byte {
+	h.treeMu.Lock()
+	defer h.treeMu.Unlock()
+	if h.treeJSON != nil && time.Since(h.treeAt) < treeCacheTTL {
+		return h.treeJSON
+	}
+
 	root := treeEntry{
 		Name:  filepath.Base(h.root),
 		Path:  "/",
@@ -252,9 +297,26 @@ func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
 	pruneEmptyDirs(&root)
 	sortTree(&root)
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(root); err != nil {
+	data, err := json.Marshal(root)
+	if err != nil {
 		log.Printf("tree json encode error: %v", err)
+		return nil
+	}
+	h.treeJSON = data
+	h.treeAt = time.Now()
+	return data
+}
+
+func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+	data := h.treeJSONCached()
+	if data == nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := w.Write(data); err != nil {
+		log.Printf("tree json write error: %v", err)
 	}
 }
 
