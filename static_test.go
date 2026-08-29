@@ -1,0 +1,51 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestAlertCSSIncludesBackgroundTints(t *testing.T) {
+	// GitHub renders alert callouts with a tinted background per type, not
+	// just a colored left border. Ensure the embedded stylesheet carries
+	// both the muted background variables and the per-type background rules.
+	for _, want := range []string{
+		"--bgColor-accent-muted",
+		"--bgColor-success-muted",
+		"--bgColor-attention-muted",
+		"--bgColor-danger-muted",
+		"--bgColor-done-muted",
+		".markdown-body .markdown-alert.markdown-alert-note{border-left-color:var(--borderColor-accent-emphasis);background-color:var(--bgColor-accent-muted)}",
+		".markdown-body .markdown-alert.markdown-alert-tip{border-left-color:var(--borderColor-success-emphasis);background-color:var(--bgColor-success-muted)}",
+		".markdown-body .markdown-alert.markdown-alert-important{border-left-color:var(--borderColor-done-emphasis);background-color:var(--bgColor-done-muted)}",
+		".markdown-body .markdown-alert.markdown-alert-warning{border-left-color:var(--borderColor-attention-emphasis);background-color:var(--bgColor-attention-muted)}",
+		".markdown-body .markdown-alert.markdown-alert-caution{border-left-color:var(--borderColor-danger-emphasis);background-color:var(--bgColor-danger-muted)}",
+	} {
+		if !strings.Contains(defaultCSS, want) {
+			t.Errorf("defaultCSS missing %q", want)
+		}
+	}
+}
+
+func TestTablesortCSSPresent(t *testing.T) {
+	for _, want := range []string{
+		".markdown-body th,.dir-list th{cursor:pointer;user-select:none}",
+		".sort-ind{font-size:.8em;opacity:.6;margin-left:2px}",
+	} {
+		if !strings.Contains(defaultCSS, want) {
+			t.Errorf("defaultCSS missing %q", want)
+		}
+	}
+}
+
+func TestTocCSSPresent(t *testing.T) {
+	for _, want := range []string{
+		".mdview-toc{",
+		".mdview-toc .toc-tree a.active{",
+		"scroll-behavior:smooth",
+	} {
+		if !strings.Contains(defaultCSS, want) {
+			t.Errorf("defaultCSS missing %q", want)
+		}
+	}
+}

@@ -12,12 +12,18 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 type fileHandler struct {
 	root      string
 	md        *markdownConverter
 	customCSS string
+
+	treeMu   sync.Mutex
+	treeJSON []byte
+	treeAt   time.Time
 }
 
 func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -28,18 +34,23 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-
 	if relPath == "/__mdview/mermaid.js" {
-		w.Header().Set("Content-Type", "application/javascript")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		_, _ = w.Write(mermaidJS)
+		serveAsset(w, "application/javascript", mermaidJS)
 		return
 	}
 
 	if relPath == "/__mdview/sidebar.js" {
-		w.Header().Set("Content-Type", "application/javascript")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		_, _ = w.Write(sidebarJS)
+		serveAsset(w, "application/javascript", sidebarJS)
+		return
+	}
+
+	if relPath == "/__mdview/tablesort.js" {
+		serveAsset(w, "application/javascript", tablesortJS)
+		return
+	}
+
+	if relPath == "/__mdview/toc.js" {
+		serveAsset(w, "application/javascript", tocJS)
 		return
 	}
 
@@ -48,15 +59,22 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #nosec G304 G703 -- fsPath is joined from h.root and the path.Clean'd request path, then prefix-checked against h.root above
 	info, err := os.Stat(fsPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
 	if info.IsDir() {
 		if !strings.HasSuffix(r.URL.Path, "/") {
-			http.Redirect(w, r, relPath+"/", http.StatusMovedPermanently) // #nosec G710 -- relPath is path.Clean'd, always starts with /
+			// #nosec G710 -- relPath is path.Clean'd, always starts with /
+			// nosemgrep: go.lang.security.injection.open-redirect.open-redirect -- same: relPath is server-side path.Clean'd, never a full URL
+			http.Redirect(w, r, relPath+"/", http.StatusMovedPermanently)
 			return
 		}
 		h.serveDirectory(w, r, fsPath, relPath)
@@ -68,8 +86,13 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(fsPath) // #nosec G304 -- fsPath validated against h.root above
+	// #nosec G304 G703 -- fsPath validated against h.root above (HasPrefix check on the joined path)
+	f, err := os.Open(fsPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -80,14 +103,20 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
 	for _, name := range []string{"README.md", "readme.md", "INDEX.md", "index.md"} {
 		indexPath := filepath.Join(fsPath, name)
+		// #nosec G304 G703 -- fixed candidate name joined onto fsPath already validated in ServeHTTP
 		if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
 			h.serveMarkdown(w, r, indexPath, relPath)
 			return
 		}
 	}
 
+	// #nosec G304 G703 -- fsPath validated against h.root in ServeHTTP
 	entries, err := os.ReadDir(fsPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -137,8 +166,33 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 }
 
 func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
-	source, err := os.ReadFile(fsPath) // #nosec G304 -- fsPath validated against h.root in ServeHTTP
+	// #nosec G304 G703 -- fsPath validated against h.root in ServeHTTP (or built from fixed index names in serveDirectory)
+	info, err := os.Stat(fsPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// ETag from file identity lets browsers revalidate cheaply and lets us
+	// short-circuit with 304 without re-reading/re-rendering unchanged files.
+	etag := fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size())
+	if match := r.Header.Get("If-None-Match"); match == etag {
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	// #nosec G304 G703 -- fsPath validated against h.root in ServeHTTP before dispatch
+	source, err := os.ReadFile(fsPath)
+	if err != nil {
+		if os.IsPermission(err) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -150,7 +204,10 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 	}
 
 	title := filepath.Base(fsPath)
-	if strings.HasPrefix(body, "<h1") {
+	// Front matter title wins, else the first <h1>, else the filename.
+	if t := h.md.metaTitleOf(source); t != "" {
+		title = t
+	} else if strings.HasPrefix(body, "<h1") {
 		start := strings.Index(body, ">")
 		end := strings.Index(body, "</h1>")
 		if start != -1 && end != -1 && end > start {
@@ -159,15 +216,18 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 	}
 
 	data := pageData{
-		Title:       title,
-		CSS:         h.css(),
-		Body:        template.HTML(body), // #nosec G203 -- goldmark output is trusted
+		Title: title,
+		CSS:   h.css(),
+		// #nosec G203 -- goldmark output is trusted
+		// nosemgrep: go.lang.security.audit.xss.template-html-does-not-escape.unsafe-template-type -- rendered markdown from local files, the server's entire purpose
+		Body:        template.HTML(body),
 		Breadcrumbs: buildBreadcrumbs(relPath),
 		HasMermaid:  strings.Contains(body, `class="mermaid"`),
 		CurrentPath: relPath,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("ETag", etag)
 	if err := mdTmpl.Execute(w, data); err != nil {
 		log.Printf("md template error: %v", err)
 	}
@@ -175,9 +235,13 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 
 func (h *fileHandler) css() template.CSS {
 	if h.customCSS != "" {
-		return template.CSS(h.customCSS) // #nosec G203 -- user-supplied CSS is intentional
+		// #nosec G203 -- user-supplied CSS is intentional
+		// nosemgrep: go.lang.security.audit.xss.template-html-does-not-escape.unsafe-template-type -- operator-provided -css flag, intentional
+		return template.CSS(h.customCSS)
 	}
-	return template.CSS(defaultCSS) // #nosec G203 -- hardcoded CSS is safe
+	// #nosec G203 -- hardcoded CSS is safe
+	// nosemgrep: go.lang.security.audit.xss.template-html-does-not-escape.unsafe-template-type -- compile-time constant
+	return template.CSS(defaultCSS)
 }
 
 func buildBreadcrumbs(relPath string) []breadcrumb {
@@ -219,7 +283,22 @@ type treeEntry struct {
 	Children []treeEntry `json:"children,omitempty"`
 }
 
-func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
+// treeCacheTTL bounds how long the sidebar tree stays cached. The tree can
+// change as files are added/removed on disk, so it is rebuilt after this
+// window instead of holding a stale snapshot forever.
+const treeCacheTTL = 5 * time.Second
+
+// treeJSONCached returns the serialized file tree, rebuilding it at most
+// once per treeCacheTTL. The walk, prune and sort are the most expensive
+// work the server does on every page load, so caching avoids repeating it
+// for rapid successive requests (e.g. the sidebar fetching on each page).
+func (h *fileHandler) treeJSONCached() []byte {
+	h.treeMu.Lock()
+	defer h.treeMu.Unlock()
+	if h.treeJSON != nil && time.Since(h.treeAt) < treeCacheTTL {
+		return h.treeJSON
+	}
+
 	root := treeEntry{
 		Name:  filepath.Base(h.root),
 		Path:  "/",
@@ -229,9 +308,9 @@ func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
+		// Dot directories are walked like any other so they appear in the
+		// sidebar (e.g. .obsidian vaults); directories with no markdown
+		// anywhere beneath them are pruned later by pruneEmptyDirs.
 		if !d.IsDir() && !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
 			return nil
 		}
@@ -252,10 +331,39 @@ func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
 	pruneEmptyDirs(&root)
 	sortTree(&root)
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(root); err != nil {
+	data, err := json.Marshal(root)
+	if err != nil {
 		log.Printf("tree json encode error: %v", err)
+		return nil
 	}
+	h.treeJSON = data
+	h.treeAt = time.Now()
+	return data
+}
+
+func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+	data := h.treeJSONCached()
+	if data == nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- JSON payload of server-walked filenames, serialized by encoding/json
+	if _, err := w.Write(data); err != nil {
+		log.Printf("tree json write error: %v", err)
+	}
+}
+
+// serveAsset writes an embedded static asset. These are go:embed'd files
+// compiled into the binary, not user input.
+//
+// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- assets are build-time embedded, never request-derived
+func serveAsset(w http.ResponseWriter, contentType string, asset []byte) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- asset is compile-time embedded bytes
+	_, _ = w.Write(asset)
 }
 
 func insertIntoTree(root *treeEntry, segments []string, urlPath string, isDir bool) {

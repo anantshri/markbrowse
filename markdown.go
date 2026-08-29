@@ -2,18 +2,23 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	alerts "github.com/thiagokokada/goldmark-gh-alerts"
 	ghsummary "github.com/thiagokokada/goldmark-gh-alerts/summary"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark-meta"
 	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/renderer/html"
+	ghtml "github.com/yuin/goldmark/renderer/html"
 	"go.abhg.dev/goldmark/mermaid"
 	"go.abhg.dev/goldmark/wikilink"
+	"gopkg.in/yaml.v2"
 )
 
 // alertIcons maps each GitHub alert kind to its octicon SVG, mirroring GitHub's
@@ -32,29 +37,126 @@ type markdownConverter struct {
 }
 
 func newMarkdownConverter(rootDir string) *markdownConverter {
-	idx := buildFileIndex(rootDir)
-
 	gm := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,
 			&mermaid.Extender{NoScript: true},
 			&alerts.GhAlerts{Icons: alertIcons},
 			&wikilink.Extender{
-				Resolver: &wikilinkResolver{idx: idx},
+				Resolver: &wikilinkResolver{rootDir: rootDir},
 			},
+			// Registers the YAML front matter parser only; the table is
+			// rendered by renderMetaTable below so we control the layout
+			// (GitHub-style rows) instead of the extension's column layout.
+			meta.New(),
 		),
 		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
-		goldmark.WithRendererOptions(html.WithUnsafe()),
+		goldmark.WithRendererOptions(ghtml.WithUnsafe()),
 	)
 	return &markdownConverter{gm: gm}
 }
 
 func (m *markdownConverter) convert(source []byte) (string, error) {
-	var buf bytes.Buffer
-	if err := m.gm.Convert(source, &buf); err != nil {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+
+	ctx := parser.NewContext()
+	if err := m.gm.Convert(source, buf, parser.WithContext(ctx)); err != nil {
 		return "", err
 	}
-	return buf.String(), nil
+	body := buf.String()
+
+	// Prepend a GitHub-style table for YAML front matter, if any. The items
+	// form preserves the order keys appear in the document.
+	table := renderMetaTable(meta.GetItems(ctx))
+	if table != "" {
+		body = table + "\n" + body
+	}
+	return body, nil
+}
+
+// renderMetaTable renders parsed front matter as the key/value table GitHub
+// produces: one row per key, key in <th>, value in <td>, first pair in
+// <thead>. YAML errors fall back to the unordered map (GetItems is nil when
+// the second Unmarshal failed); an empty result renders nothing.
+func renderMetaTable(items yaml.MapSlice) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(`<table class="meta-table">`)
+	for i, item := range items {
+		if i == 0 {
+			b.WriteString("<thead>")
+		} else if i == 1 {
+			b.WriteString("<tbody>")
+		}
+		b.WriteString("<tr><th>")
+		b.WriteString(html.EscapeString(fmt.Sprint(item.Key)))
+		b.WriteString("</th><td>")
+		b.WriteString(renderMetaValue(item.Value))
+		b.WriteString("</td></tr>")
+		if i == 0 {
+			b.WriteString("</thead>")
+		}
+	}
+	if len(items) > 1 {
+		b.WriteString("</tbody>")
+	}
+	b.WriteString("</table>")
+	return b.String()
+}
+
+// renderMetaValue stringifies a front matter value: scalars verbatim
+// (escaped), slices one per line.
+func renderMetaValue(v interface{}) string {
+	switch val := v.(type) {
+	case []interface{}:
+		parts := make([]string, 0, len(val))
+		for _, item := range val {
+			parts = append(parts, html.EscapeString(fmt.Sprint(item)))
+		}
+		return strings.Join(parts, "<br>")
+	case string:
+		return html.EscapeString(val)
+	default:
+		return html.EscapeString(fmt.Sprint(val))
+	}
+}
+
+// metaTitle returns the document title from front matter, if present.
+func metaTitle(items yaml.MapSlice) string {
+	for _, item := range items {
+		if key, ok := item.Key.(string); ok && strings.EqualFold(key, "title") {
+			if s, ok := item.Value.(string); ok {
+				return s
+			}
+			return fmt.Sprint(item.Value)
+		}
+	}
+	return ""
+}
+
+// metaTitleOf parses just enough of source to pull the front matter title,
+// without running a full render. Returns "" when absent.
+func (m *markdownConverter) metaTitleOf(source []byte) string {
+	ctx := parser.NewContext()
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	if err := m.gm.Convert(source, buf, parser.WithContext(ctx)); err != nil {
+		return ""
+	}
+	return metaTitle(meta.GetItems(ctx))
+}
+
+// bufPool reuses the scratch buffer used for markdown rendering. Rendering is
+// a per-request hot path, so avoiding an allocation on every page view adds
+// up quickly under load.
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
 }
 
 // fileIndex maps lowercase file stems to their URL paths.
@@ -66,9 +168,8 @@ func buildFileIndex(rootDir string) fileIndex {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
+		// Dot directories are indexed too, mirroring serveTreeJSON, so
+		// wikilinks resolve consistently with what the sidebar shows.
 		if d.IsDir() {
 			return nil
 		}
@@ -93,19 +194,33 @@ func buildFileIndex(rootDir string) fileIndex {
 }
 
 type wikilinkResolver struct {
-	idx fileIndex
+	rootDir string
+
+	once sync.Once
+	idx  fileIndex
+}
+
+// index returns the file index, building it lazily on first use. The index
+// walks the whole tree, which is expensive on large directories, so it is
+// deferred until a [[wikilink]] actually needs resolution.
+func (r *wikilinkResolver) index() fileIndex {
+	r.once.Do(func() {
+		r.idx = buildFileIndex(r.rootDir)
+	})
+	return r.idx
 }
 
 func (r *wikilinkResolver) ResolveWikilink(n *wikilink.Node) ([]byte, error) {
+	idx := r.index()
 	target := strings.ToLower(string(n.Target))
 
 	// Try stem match first (e.g., "notes" -> "notes.md")
-	if p, ok := r.idx[target]; ok {
+	if p, ok := idx[target]; ok {
 		return r.buildURL(p, n.Fragment), nil
 	}
 
 	// Try with .md extension
-	if p, ok := r.idx[target+".md"]; ok {
+	if p, ok := idx[target+".md"]; ok {
 		return r.buildURL(p, n.Fragment), nil
 	}
 

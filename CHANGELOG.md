@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Client-side table sorting: click any table header (markdown tables and the
+  directory listing) to sort ascending/descending, with value-aware ordering
+  for numbers, byte sizes (`1.5 KB`), timestamps, and `../` rows pinned on
+  top (#6).
+- Right-hand collapsible table of contents on markdown pages, built from the
+  heading hierarchy with active-section highlighting and smooth scrolling;
+  hidden below 1100px viewport width (#13).
+- YAML front matter now renders as a GitHub-style key/value table (one row
+  per key, first pair in `<thead>`), and a `title` key sets the page title
+  (#14).
+- `ETag`/`304` support for markdown pages: conditional requests skip
+  re-reading and re-rendering unchanged files.
+- Sidebar tree JSON is cached for 5 seconds, sparing a full directory walk
+  on every page load.
+- Wikilink file index is built lazily on first `[[link]]` instead of at
+  startup.
+
+### Fixed
+- Dot directories (e.g. `.obsidian`) now appear in the sidebar tree and
+  resolve in wikilinks, provided they contain markdown files (#1).
+- Permission errors now surface as `403 Forbidden` (previously masked as
+  404/500), and the server validates at startup that the root directory is
+  readable, failing fast with a clear message (#2).
+- GitHub-style alert callouts (`> [!NOTE]` etc.) render with per-type tinted
+  backgrounds in both light and dark themes, matching GitHub (#3).
+
+### Changed
+- Bumped `github.com/yuin/goldmark` from 1.8.2 to 1.8.5.
+
 ## [0.2.0] - 2026-06-02
 
 ### Fixed

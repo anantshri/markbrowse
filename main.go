@@ -59,6 +59,9 @@ func main() {
 	if !info.IsDir() {
 		log.Fatalf("%s is not a directory", rootDir)
 	}
+	if err := validateReadable(rootDir); err != nil {
+		log.Fatalf("cannot serve %s: %v", rootDir, err)
+	}
 
 	customCSS, err := loadCustomCSS(*cssPath)
 	if err != nil {
@@ -118,4 +121,17 @@ func loadCustomCSS(path string) (string, error) {
 		return "", fmt.Errorf("reading custom CSS: %w", err)
 	}
 	return string(data), nil
+}
+
+// validateReadable confirms the root directory can actually be read before
+// the server starts, so permission problems fail fast with a clear message
+// instead of surfacing as per-request errors after startup.
+func validateReadable(rootDir string) error {
+	if _, err := os.ReadDir(rootDir); err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("permission denied reading directory (check read+execute permissions): %w", err)
+		}
+		return fmt.Errorf("reading directory: %w", err)
+	}
+	return nil
 }
