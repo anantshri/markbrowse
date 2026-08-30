@@ -64,8 +64,12 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 <script>mermaid.initialize({startOnLoad:false,theme:"default"});mermaid.run();</script>{{end}}
 </div>
 </main>
+<nav class="mdview-toc" id="toc-root" aria-label="Table of contents"></nav>
+<button id="toc-toggle" title="Toggle table of contents">&#187;</button>
 </div>
 <script src="/__mdview/sidebar.js"></script>
+<script src="/__mdview/tablesort.js"></script>
+<script src="/__mdview/toc.js"></script>
 </body>
 </html>`))
 
@@ -105,5 +109,6 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 </main>
 </div>
 <script src="/__mdview/sidebar.js"></script>
+<script src="/__mdview/tablesort.js"></script>
 </body>
 </html>`))

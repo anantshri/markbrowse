@@ -12,6 +12,9 @@ A minimal markdown file viewer. Point it at any directory and it starts a web se
 - [Mermaid](https://mermaid.js.org/) diagram rendering
 - Wiki-style `[[link]]` syntax with file-tree resolution
 - GitHub/Obsidian-style admonition callouts (`> [!NOTE]`, `> [!WARNING]`, etc.)
+- YAML front matter rendered as a GitHub-style metadata table, with `title` used as the page title
+- Client-side table sorting (click column headers; numbers, byte sizes, and timestamps sort naturally)
+- Collapsible right-hand table of contents built from the heading hierarchy
 - Custom CSS support to override the built-in stylesheet
 - Breadcrumb navigation on all pages
 - Single binary, zero config
@@ -80,6 +83,11 @@ Markdown rendering supports GFM features: tables, strikethrough, task lists, aut
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+## Acknowledgments
+
+- Front matter rendering idea: [AngieGit](https://github.com/AngieGit) —
+  [issue #14](https://github.com/anantshri/markbrowse/issues/14)
 
 ## License
 
