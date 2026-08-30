@@ -9,6 +9,57 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-08-30 — Collapsible right sidebar (TOC toggle)
+
+**Summary:** The right-hand TOC panel now collapses and restores via a
+toggle button, mirroring the left file sidebar's behavior exactly.
+
+**Why:** The TOC added for #13 was always visible on wide viewports with no
+way to reclaim the reading width. The left sidebar already had a collapse
+pattern; the right side deserved the same.
+
+**What changed:**
+- `templates.go`: `<button id="toc-toggle">` after the TOC nav in `mdTmpl`
+  only (» glyph; JS flips to « when collapsed).
+- `static.go`: `.mdview-toc` gains `transition:width .2s ease,min-width
+  .2s ease`; new `#toc-toggle` fixed-position button rule (mirrored
+  geometry: `right:240px` at the TOC's edge), `body.toc-collapsed` rules
+  collapsing the panel and parking the button at `right:12px`; the 1100px
+  media query now hides the button alongside the panel.
+- `static/js/toc.js`: toggle handler flipping `body.toc-collapsed` and the
+  glyph; the no-headings early exit now hides the button too (no dead
+  button on heading-less pages).
+- Tests: `TestTemplatesIncludeClientScripts` asserts the button on mdTmpl
+  and its absence on dirTmpl; new `TestTocToggleCSSPresent` covers the
+  button, collapse, and media-query rules.
+
+**How / commands run:**
+```
+node --check static/js/toc.js
+go build ./... && go vet ./... && go test ./...   # 40 passed
+go build -o /tmp/markbrowse-e2e . && /tmp/markbrowse-e2e -port 18452 testdata/
+curl -s http://localhost:18452/guides/table-of-contents.md | grep toc-toggle
+curl -s http://localhost:18452/guides/ | grep -o '[^<>]*toc-toggle[^<>]*'
+```
+
+**Errors encountered & resolution:** An initial live check looked like the
+dir page "matched toc-toggle 3×" — inspection showed those were the CSS
+rules in the shared stylesheet (`#toc-toggle` selectors), not the button
+element; selectors are inert without the element, and the Go test asserts
+the `id="toc-toggle"` attribute form, which correctly appears only on md
+pages. No fix needed.
+
+**Verification:** Button present on `guides/table-of-contents.md`, absent
+(dir-listing HTML) on `/guides/`; served `toc.js` contains the
+`toc-collapsed` handler; served CSS carries the collapse rules. 40 tests
+pass; `aidc-scan` clean.
+
+**Notes / follow-ups:** No state persistence (matches left sidebar);
+no mobile drawer mode for the TOC — left sidebar's ≤767px pattern stays
+unique to it.
+
+---
+
 ## 2026-08-30 — Test fixtures for the new feature set
 
 **Summary:** Added markdown fixtures under `testdata/` exercising every

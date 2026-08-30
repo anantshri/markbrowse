@@ -82,7 +82,7 @@ body {
 .markdown-body th:hover,.dir-list th:hover{text-decoration:underline}
 .sort-ind{font-size:.8em;opacity:.6;margin-left:2px}
 html{scroll-behavior:smooth}
-.mdview-toc{width:240px;min-width:240px;position:sticky;top:0;height:100vh;overflow-y:auto;overflow-x:hidden;border-left:1px solid var(--borderColor-default,#d1d9e0);background:var(--bgColor-default,#fff);box-sizing:border-box;padding:48px 12px 24px 12px;font-size:13px}
+.mdview-toc{width:240px;min-width:240px;position:sticky;top:0;height:100vh;overflow-y:auto;overflow-x:hidden;border-left:1px solid var(--borderColor-default,#d1d9e0);background:var(--bgColor-default,#fff);box-sizing:border-box;padding:48px 12px 24px 12px;font-size:13px;transition:width .2s ease,min-width .2s ease}
 .mdview-toc .toc-tree details{margin:2px 0}
 .mdview-toc .toc-tree summary{cursor:pointer;list-style:none;padding:2px 4px;color:var(--fgColor-default,#1f2328)}
 .mdview-toc .toc-tree summary::-webkit-details-marker{display:none}
@@ -96,7 +96,10 @@ html{scroll-behavior:smooth}
 .mdview-toc .toc-l4{margin-left:36px}
 .mdview-toc .toc-l5{margin-left:48px}
 .mdview-toc .toc-l6{margin-left:60px}
-@media(max-width:1100px){.mdview-toc{display:none}}
+@media(max-width:1100px){.mdview-toc{display:none}#toc-toggle{display:none}}
+#toc-toggle{position:fixed;top:12px;right:240px;z-index:100;width:28px;height:28px;border:1px solid var(--borderColor-default,#d1d9e0);border-radius:4px;background:var(--bgColor-default,#fff);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--fgColor-muted,#59636e);transition:right .2s ease;line-height:1}
+body.toc-collapsed .mdview-toc{width:0;min-width:0;overflow:hidden;border-left:none;padding-left:0;padding-right:0}
+body.toc-collapsed #toc-toggle{right:12px}
 .mdview-layout{display:flex;min-height:100vh}
 .mdview-sidebar{width:260px;min-width:260px;border-right:1px solid var(--borderColor-default,#d1d9e0);background:var(--bgColor-muted,#f6f8fa);overflow-y:auto;overflow-x:hidden;position:sticky;top:0;height:100vh;transition:width .2s ease,min-width .2s ease}
 .sidebar-header{padding:12px 16px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--fgColor-muted,#59636e);border-bottom:1px solid var(--borderColor-default,#d1d9e0)}

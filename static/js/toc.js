@@ -11,9 +11,19 @@
   var container = document.getElementById("toc-root");
   if (!container) return;
 
+  var toggleBtn = document.getElementById("toc-toggle");
+  if (toggleBtn) {
+    toggleBtn.onclick = function () {
+      var collapsed = document.body.classList.toggle("toc-collapsed");
+      toggleBtn.textContent = collapsed ? "«" : "»"; // « / »
+    };
+  }
+
   var headings = document.querySelectorAll(".markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6");
   if (!headings.length) {
-    container.closest(".mdview-toc") && (container.closest(".mdview-toc").style.display = "none");
+    var toc = container.closest(".mdview-toc");
+    if (toc) toc.style.display = "none";
+    if (toggleBtn) toggleBtn.style.display = "none";
     return;
   }
 

@@ -13,7 +13,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   top (#6).
 - Right-hand collapsible table of contents on markdown pages, built from the
   heading hierarchy with active-section highlighting and smooth scrolling;
-  hidden below 1100px viewport width (#13).
+  the panel itself collapses via a `»` toggle button (mirroring the left
+  sidebar's animation), and hides below 1100px viewport width (#13).
 - YAML front matter now renders as a GitHub-style key/value table (one row
   per key, first pair in `<thead>`), and a `title` key sets the page title
   (#14).

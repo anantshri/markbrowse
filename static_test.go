@@ -49,3 +49,19 @@ func TestTocCSSPresent(t *testing.T) {
 		}
 	}
 }
+
+func TestTocToggleCSSPresent(t *testing.T) {
+	for _, want := range []string{
+		"#toc-toggle{position:fixed;top:12px;right:240px;",
+		"body.toc-collapsed .mdview-toc{width:0;min-width:0;overflow:hidden;border-left:none;padding-left:0;padding-right:0}",
+		"body.toc-collapsed #toc-toggle{right:12px}",
+		// Below 1100px the TOC can't show, so the button must hide too.
+		"@media(max-width:1100px){.mdview-toc{display:none}#toc-toggle{display:none}}",
+		// Collapse animates like the left sidebar.
+		"transition:width .2s ease,min-width .2s ease",
+	} {
+		if !strings.Contains(defaultCSS, want) {
+			t.Errorf("defaultCSS missing %q", want)
+		}
+	}
+}

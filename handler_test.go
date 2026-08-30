@@ -333,8 +333,14 @@ func TestTemplatesIncludeClientScripts(t *testing.T) {
 	if !strings.Contains(md.String(), `id="toc-root"`) {
 		t.Error("mdTmpl should include the toc-root nav element")
 	}
+	if !strings.Contains(md.String(), `id="toc-toggle"`) {
+		t.Error("mdTmpl should include the toc-toggle button")
+	}
 	if strings.Contains(dir.String(), "/__mdview/toc.js") {
 		t.Error("dirTmpl should not include toc.js script")
+	}
+	if strings.Contains(dir.String(), `id="toc-toggle"`) {
+		t.Error("dirTmpl should not include the toc-toggle button")
 	}
 }
 
