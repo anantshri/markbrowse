@@ -45,6 +45,10 @@ markbrowse /path/to/docs
 # Custom port
 markbrowse --port 3000
 
+# Expose on the network (default is loopback-only, since the server is
+# unauthenticated — only do this on trusted networks)
+markbrowse --listen 0.0.0.0
+
 # Custom CSS (replaces built-in stylesheet entirely)
 markbrowse --css ./my-theme.css
 
@@ -56,6 +60,12 @@ markbrowse --raw-html
 Open `http://localhost:8080` in your browser. If the requested port is busy,
 `markbrowse` automatically falls back to the next free port (searching from
 10000 upward) and logs the port it bound to.
+
+By default the server binds `127.0.0.1` only. It serves files without
+authentication, so it is deliberately not reachable from the network unless
+you pass `--listen 0.0.0.0` (or a specific interface address). If you run it
+in a container with a port mapping (e.g. `docker run -p 8080:8080 ...`),
+add `--listen 0.0.0.0` or the mapping will not reach it.
 
 ## How it works
 
@@ -78,6 +88,8 @@ do this for content you trust, since it re-enables both.
 
 ```
   --port int    Port to listen on (default 8080)
+  --listen IP   IP or hostname to bind (default 127.0.0.1; use 0.0.0.0 to
+                expose on the network)
   --css path    Path to custom CSS file (replaces built-in stylesheet)
   --raw-html    Render raw HTML in markdown unescaped and allow
                 javascript:/data: URLs (only for content you trust)

@@ -9,6 +9,62 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-08-30 — Bind loopback by default (--listen), harden CI ref handling
+
+**Summary:** The server bound `:port` (all interfaces) with no
+authentication, so anyone on the LAN — or the internet, if port-forwarded —
+could read the entire served tree (secreports/report1.md finding 7, Low,
+CWE-306). Separately, `ci.yml` and `release.yml` interpolated
+`${{ github.ref_name }}` directly into `run:` shell steps
+(findings 5+6, CWE-78).
+
+**Why:** Both re-confirmed on `db268b3`. Exploitability of the CI finding is
+narrower than the report states — on `pull_request` events `ref_name` is
+`<N>/merge`, not the attacker's branch name, and tags are
+maintainer-controlled — but the `${{ }}`-in-`run:` pattern is still against
+GitHub's hardening guidance and worth closing.
+
+**What changed:**
+- `main.go`: `const defaultListenHost = "127.0.0.1"`; new `--listen` flag
+  (IP or hostname). `listenWithFallback(host, port)` binds
+  `net.JoinHostPort(host, port)` — JoinHostPort brackets IPv6 literals
+  (`::1` -> `[::1]:port`) where the old `Sprintf(":%d")` form did not.
+  `srv.Addr` and the startup log updated; `displayHost()` renders wildcard
+  binds as `localhost` in the logged URL (0.0.0.0 is not a browsable URL).
+- `listen_test.go`: holders now bind `127.0.0.1:0` — the same host:port spec
+  production tries. This preserves the exact invariant from commit 537b0e3
+  (the macOS CI fix): the busy-port holder must use the same bind spec as
+  the code under test, or the two sockets coexist on macOS/BSD and the
+  "busy" port binds successfully. The now-unneeded wildcard nosemgrep
+  annotations on the holders were removed; new tests:
+  TestDefaultListenHostIsLoopback, TestListenWithFallbackWildcardHost,
+  TestListenWithFallbackIPv6Loopback, TestDisplayHost.
+- `ci.yml` Build step and `release.yml` Package step: `REF_NAME` passed via
+  `env:`, referenced as `"$REF_NAME"`, and scrubbed with
+  `tr -c 'A-Za-z0-9._-' '_'` before use. Env-passing alone removes the
+  `${{ }}`-in-`run:` pattern scanners flag; the scrub also closes the
+  residual hole that git refs may legally contain `"` and `$` (so
+  `x";curl${IFS}evil` could still break out of a double-quoted ldflags
+  string), and guarantees the archive name is a valid filename.
+- `README.md`: default-bind callout, docker `-p` migration note, flags
+  block updated.
+
+**Commands and verification:**
+- `go build ./... && go vet ./...` — clean.
+- `go test -cover ./...` — 69 tests pass (4 new listen tests +
+  TestDisplayHost).
+- Live check: default run binds `127.0.0.1` (connection from the host's LAN
+  IP refused); `--listen 0.0.0.0` restores network reachability; `--listen
+  ::1` binds IPv6 loopback.
+- Workflow YAML: no `${{ github.` remains inside any `run:` block (checked
+  by grep); `actionlint` is not installed in this container, so YAML was
+  verified by inspection + CI will exercise it.
+
+**Notes:** This is the one deliberately breaking change in the security
+batch: anyone serving on a LAN (or in a container with `-p`) must now pass
+`--listen 0.0.0.0`. Called out in CHANGELOG under **Changed** with a
+migration note, per Keep-a-Changelog convention for behavior changes.
+
 ## 2026-08-30 — Symlink containment and VCS-dir blocking in the file handler
 
 **Summary:** The root-containment check was purely lexical
