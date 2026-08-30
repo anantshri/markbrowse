@@ -7,7 +7,11 @@ Welcome to the **markbrowse** sample directory. This demonstrates all supported 
 - GFM tables, task lists, and strikethrough
 - Mermaid diagrams
 - Wiki-style links (`[[notes]]`)
-- Admonition callouts
+- Admonition callouts with tinted backgrounds
+- YAML front matter rendered as a metadata table ([[frontmatter]])
+- Click-to-sort tables ([[table-sorting]])
+- Right-hand collapsible table of contents ([[table-of-contents]])
+- Dot directories in the sidebar and wikilinks ([[vault-notes]])
 
 > [!TIP]
 > Click the folder icons in the sidebar to explore subdirectories.
@@ -21,6 +25,9 @@ Welcome to the **markbrowse** sample directory. This demonstrates all supported 
 | Mermaid | ````mermaid` | Supported |
 | Wiki links | `[[link]]` | Supported |
 | Callouts | `> [!NOTE]` | Supported |
+| Front matter | `---` block | Supported |
+| Table sorting | click headers | Supported |
+| TOC | right sidebar | Supported |
 
 ## Task List
 

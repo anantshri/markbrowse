@@ -35,6 +35,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 - Bumped `github.com/yuin/goldmark` from 1.8.2 to 1.8.5.
+- Expanded the sample vault in `testdata/` with fixtures for every new
+  feature: front matter (`frontmatter.md`, plus titles on two guides),
+  heading-depth TOC and sortable-table demos under `guides/`, an
+  `.obsidian/` dot-directory page reachable via `[[vault-notes]]`, and a
+  performance/behavior reference.
 
 ## [0.2.0] - 2026-06-02
 

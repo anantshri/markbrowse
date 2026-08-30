@@ -9,6 +9,64 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-08-30 — Test fixtures for the new feature set
+
+**Summary:** Added markdown fixtures under `testdata/` exercising every
+feature from the 2026-08-29 integration round, so `markbrowse testdata/`
+demonstrates and manually verifies all of it out of the box.
+
+**Why:** The new features (front matter table, TOC, table sorting, dot-dirs,
+alert tints, ETag/tree caching) shipped with Go unit tests and temporary
+`/tmp` fixtures, but the in-repo sample vault still showcased only the
+original feature set — nothing reproducible for a human to click through.
+
+**What changed:**
+- `testdata/frontmatter.md` (new): full metadata block (strings, bool,
+  number, two lists) — renders the GitHub-style table and sets the tab
+  title; body links onward via wikilinks.
+- `testdata/guides/table-of-contents.md` (new): h1–h6 hierarchy including a
+  level skip, exercising the TOC's nesting, expand/collapse defaults, and
+  anchors.
+- `testdata/guides/table-sorting.md` (new): four tables (comma numbers, byte
+  sizes, timestamps, mixed text) starting out of order, with per-table
+  instructions on what correct sorting proves.
+- `testdata/guides/callout-tints.md` (new): all five alert types + dark-mode
+  note; also carries front matter (title check).
+- `testdata/guides/performance.md` (new): documents and demonstrates the
+  ETag/304 flow (copy-paste curl), tree TTL, lazy wikilink index, and the
+  permission behavior table.
+- `testdata/.obsidian/vault-notes.md` (new): dot-directory fixture reachable
+  as `[[vault-notes]]` and visible in the sidebar.
+- `testdata/README.md`: feature list extended; wikilinks to every new
+  fixture (which is itself the wikilink-resolution test).
+
+**How / commands run:**
+```
+go build -o /tmp/markbrowse-e2e .
+/tmp/markbrowse-e2e -port 18441 /workspace/testdata
+curl -s http://localhost:18441/__mdview/tree.json   # .obsidian + new guides listed
+curl -s http://localhost:18441/frontmatter.md       # meta table + <title>
+curl -sI http://localhost:18441/guides/performance.md | grep -i etag
+curl -s http://localhost:18441/README.md            # wikilinks resolved
+go build ./... && go vet ./... && go test ./...     # 39 passed
+aidc-scan                                           # clean
+```
+
+**Verification:** Live server against `testdata/` — tree lists `.obsidian/`
+and all five new pages; `frontmatter.md` renders the full meta table with
+`<title>Case Assignment Memo</title>`; both titled guides pick up their
+front-matter titles; `performance.md` carries an ETag; all README wikilinks
+resolve to real hrefs (`/.obsidian/vault-notes.md`, `/frontmatter.md`, both
+new guides); the TOC fixture produces 11 anchored headings across all six
+levels; the sorting fixture renders 4 tables; `getting-started.md` remains
+meta-table-free (regression guard). `aidc-scan` clean.
+
+**Notes / follow-ups:** Fixtures are prose-first (they double as user-facing
+demos); assertions about them live in the Go test suite via temp dirs, not
+in testdata itself, to keep the sample vault clean.
+
+---
+
 ## 2026-08-29 — PR integration round: table sorting, TOC, front matter, permissions, perf
 
 **Summary:** Folded the useful content of open PRs #5, #7, #8, #9, #11, #12
