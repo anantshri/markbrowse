@@ -218,8 +218,11 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 	data := pageData{
 		Title: title,
 		CSS:   h.css(),
-		// #nosec G203 -- goldmark output is trusted
-		// nosemgrep: go.lang.security.audit.xss.template-html-does-not-escape.unsafe-template-type -- rendered markdown from local files, the server's entire purpose
+		// #nosec G203 -- goldmark output with raw HTML omitted and dangerous
+		// URLs filtered (unless --raw-html opts back in); template.HTML is
+		// still required so goldmark's own tags (<table>, <pre class="mermaid">,
+		// alert divs) render instead of printing as source.
+		// nosemgrep: go.lang.security.audit.xss.template-html-does-not-escape.unsafe-template-type -- markdown body rendered by goldmark with WithUnsafe off by default (raw HTML omitted, javascript:/data: URLs filtered); --raw-html is an explicit operator opt-in
 		Body:        template.HTML(body),
 		Breadcrumbs: buildBreadcrumbs(relPath),
 		HasMermaid:  strings.Contains(body, `class="mermaid"`),

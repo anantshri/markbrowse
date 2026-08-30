@@ -47,6 +47,10 @@ markbrowse --port 3000
 
 # Custom CSS (replaces built-in stylesheet entirely)
 markbrowse --css ./my-theme.css
+
+# Render raw HTML in markdown (only for content you trust; also re-enables
+# javascript:/data: link targets that are filtered by default)
+markbrowse --raw-html
 ```
 
 Open `http://localhost:8080` in your browser. If the requested port is busy,
@@ -65,11 +69,18 @@ Open `http://localhost:8080` in your browser. If the requested port is busy,
 
 Markdown rendering supports GFM features: tables, strikethrough, task lists, autolinks, heading anchors, mermaid diagrams, wiki links, and admonition callouts.
 
+Raw HTML embedded in markdown is omitted by default (`<!-- raw HTML omitted -->`,
+matching GitHub's behavior), and `javascript:`/`vbscript:`/`file:`/`data:` link
+targets are filtered. Pass `--raw-html` to render embedded HTML verbatim — only
+do this for content you trust, since it re-enables both.
+
 ## Flags
 
 ```
   --port int    Port to listen on (default 8080)
   --css path    Path to custom CSS file (replaces built-in stylesheet)
+  --raw-html    Render raw HTML in markdown unescaped and allow
+                javascript:/data: URLs (only for content you trust)
   --version     Print version and exit
 ```
 

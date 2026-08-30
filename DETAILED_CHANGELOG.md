@@ -9,6 +9,63 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+---
+
+## 2026-08-30 — Omit raw HTML in markdown by default, add --raw-html opt-in
+
+**Summary:** goldmark was configured with `html.WithUnsafe()`, which passes
+raw HTML in markdown through verbatim AND disables its dangerous-URL filter
+(`javascript:`/`vbscript:`/`file:`/`data:` — both behaviors are gated on the
+same `r.Unsafe` flag in goldmark's renderer). The rendered body was then
+wrapped in `template.HTML`, bypassing `html/template` auto-escaping. Anyone
+able to place a `.md` file in the served tree (e.g. a cloned repo's
+`README.md`) could execute script in every viewer's browser
+(secreports/report1.md findings 1+2, both High, CWE-79).
+
+**Why now:** Both findings were re-verified live against `db268b3` —
+`<script>`, `<img onerror>`, and `href="javascript:..."` were served
+byte-for-byte. Dropping `WithUnsafe` fixes both findings in one change with
+zero new dependencies.
+
+**What changed:**
+- `markdown.go`: `newMarkdownConverter(rootDir string, allowRawHTML bool)` —
+  `ghtml.WithUnsafe()` is appended to the renderer options only when
+  `allowRawHTML` is set. (The options slice is `[]renderer.Option`, not
+  `[]ghtml.Option` — goldmark's `WithRendererOptions` takes the wider type.)
+- `main.go`: new `--raw-html` flag, threaded to the converter. Flag help
+  states it re-enables BOTH raw HTML and dangerous-URL filtering.
+- `templates.go`: `mermaid.initialize` now passes `securityLevel:"strict"`
+  explicitly (mermaid 11.x defaults to strict; explicit beats default).
+- `handler.go`: reworded the `#nosec G203` / nosemgrep justification on
+  `template.HTML(body)` to describe the new behavior.
+- README: usage example, "How it works" note, and flags block updated.
+
+**Behavior notes:** Without `--raw-html`, HTML *blocks* (`<script>...`) are
+omitted entirely and inline HTML keeps its text but drops the tags
+(`<!-- raw HTML omitted -->bold<!-- raw HTML omitted -->`) — GitHub's own
+behavior. `data:image/png|gif|jpeg|webp` URLs remain allowed (goldmark's
+deliberate safe subset). GFM tables, task lists, strikethrough, mermaid
+blocks, wikilinks, and gh-alerts (incl. their SVG icons) render unchanged —
+verified empirically; those extensions render via their own renderers, not
+the `Unsafe`-gated paths.
+
+**Commands and verification:**
+- `go build ./... && go vet ./...` — clean.
+- `go test -cover ./...` — 51 tests pass (9 new: TestRawHTMLSuppressedByDefault,
+  TestDangerousURLsNeutralizedByDefault, TestSafeDataURLsStillRender,
+  TestSafeURLsUnaffected, TestAutolinkDangerousSchemeFiltered,
+  TestRawHTMLOptIn, TestInlineHTMLTextPreserved,
+  TestGFMFeaturesSurviveWithoutUnsafe, TestServeMarkdownEscapesScriptTag).
+- Live PoC re-run: `evil.md` with script/onerror/javascript: payloads now
+  renders as `<!-- raw HTML omitted -->` / `href=""`; with `--raw-html` the
+  trusted HTML renders verbatim.
+
+**Notes:** mermaid bundled version confirmed v11.15.0 (report's "pre-8.2"
+concern moot). Report finding 8 (tree.json full walk) verified already fixed
+by the existing 5s-TTL cache.
+
+---
+
 ## 2026-08-30 — Fix Windows CI failures in permission-denial tests
 
 **Summary:** Three tests that simulate unreadable files/directories via
