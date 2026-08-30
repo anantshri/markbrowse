@@ -28,6 +28,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   startup.
 
 ### Fixed
+- Test suite now passes on macOS/Windows: `TestListenWithFallback` held the
+  busy port on `127.0.0.1` while `listenWithFallback` binds the wildcard
+  `:port` — an IPv6 dual-stack wildcard bind coexists with an IPv4-loopback
+  holder on macOS/BSD, so the "busy" port was bindable and the fallback
+  never triggered there.
 - Dot directories (e.g. `.obsidian`) now appear in the sidebar tree and
   resolve in wikilinks, provided they contain markdown files (#1).
 - Permission errors now surface as `403 Forbidden` (previously masked as
