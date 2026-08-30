@@ -9,6 +9,51 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-08-30 — Release 0.3.0 preparation
+
+**Summary:** Cut the release paperwork for 0.3.0: the `Unreleased` changelog
+section becomes `0.3.0` dated 2026-08-30, with compare links added. No tags,
+branches, or pushes — release mechanics (tag `v0.3.0`, workflow draft) are
+done manually by the owner.
+
+**Why:** The integration round (PR fold-in + #13/#14 implementation), the
+testdata fixtures, the TOC toggle, and the README credit are all merged on
+`enhancement-29-aug-2026`; the changeset is feature-sized (semver: new
+functionality, no breaking changes → minor bump from 0.2.0 to 0.3.0).
+
+**What changed:**
+- `CHANGELOG.md`: `## [Unreleased]` → empty section retained for future
+  work + `## [0.3.0] - 2026-08-30` heading over the existing entries;
+  added `[Unreleased]` (compare v0.3.0...HEAD) and `[0.3.0]` link refs.
+- Nothing else — `main.version` stays `"dev"` (CI injects the real version
+  via `-ldflags -X main.version=` from the tag name on release builds; both
+  `ci.yml` and `release.yml` already do this), so no code changes are
+  needed for the release.
+
+**How / commands run:**
+```
+go build ./... && go vet ./... && go test ./...   # 40 passed
+aidc-scan                                          # clean
+```
+
+**Verification:** Build/vet/tests/scan all clean; changelog renders with
+the new heading and both link references resolve to the intended GitHub
+URLs (release URL for 0.3.0 will exist once the owner tags it).
+
+**Notes / follow-ups — owner's manual steps for the release:**
+1. Merge `enhancement-29-aug-2026` → `main`.
+2. `git tag v0.3.0 && git push origin v0.3.0` — this triggers
+   `.github/workflows/release.yml`, which builds linux/darwin/windows
+   (amd64/arm64) archives with the version baked in and creates a **draft**
+   GitHub release with generated notes.
+3. Edit/publish the draft release (workflow sets `draft: true`).
+4. Optionally close out PRs #5/#7/#8/#9/#11/#12 and issues
+   #1/#2/#3/#6/#13/#14 — the integration commit message carries `Fixes`
+   references, so merging the branch into default-branch commits closes
+   them automatically.
+
+---
+
 ## 2026-08-30 — Collapsible right sidebar (TOC toggle)
 
 **Summary:** The right-hand TOC panel now collapses and restores via a
