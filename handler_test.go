@@ -217,7 +217,7 @@ func TestServeHTTPForbiddenOnUnreadableFile(t *testing.T) {
 	// Ensure cleanup can still remove the file.
 	defer os.Chmod(secret, 0o644)
 
-	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
 	req := httptest.NewRequest(http.MethodGet, "/secret.md", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -261,7 +261,7 @@ func TestServeMarkdownETagNotModified(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "doc.md"), []byte("# Doc\n\ncontent"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
 
 	req := httptest.NewRequest(http.MethodGet, "/doc.md", nil)
 	rec := httptest.NewRecorder()
@@ -359,7 +359,7 @@ func TestServeDirectoryListingAndIndex(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
 
 	// Plain listing: dirs first, parent row present, tablesort included.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -410,7 +410,7 @@ func TestServeDirectoryForbiddenOnUnreadableDir(t *testing.T) {
 	}
 	defer os.Chmod(blocked, 0o755)
 
-	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
 	req := httptest.NewRequest(http.MethodGet, "/blocked/", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -425,7 +425,7 @@ func TestServeMarkdownTitleFromFrontMatter(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "doc.md"), []byte("---\ntitle: Custom Title\n---\n\n# Heading"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
 
 	req := httptest.NewRequest(http.MethodGet, "/doc.md", nil)
 	rec := httptest.NewRecorder()
@@ -435,5 +435,31 @@ func TestServeMarkdownTitleFromFrontMatter(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "<title>Custom Title</title>") {
 		t.Errorf("page title should come from front matter, got:\n%s", rec.Body.String()[:300])
+	}
+}
+
+func TestServeMarkdownEscapesScriptTag(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "evil.md"), []byte("# Evil\n\n<script>alert(document.cookie)</script>\n\n<img src=x onerror=\"alert(1)\">\n\n[click](javascript:alert(document.domain))\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evil.md", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{"<script>", "onerror=", `href="javascript:`} {
+		if strings.Contains(body, needle) {
+			t.Errorf("rendered page must not contain %q:\n%s", needle, body)
+		}
+	}
+	if !strings.Contains(body, "<!-- raw HTML omitted -->") {
+		// goldmark omits HTML *blocks* entirely (inline HTML keeps its text —
+		// see TestInlineHTMLTextPreserved); the marker proves suppression came
+		// from the renderer rather than an error page.
+		t.Errorf("body should carry the raw-HTML-omitted marker, got:\n%s", body)
 	}
 }

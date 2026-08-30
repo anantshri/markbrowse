@@ -15,6 +15,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark-meta"
 	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer"
 	ghtml "github.com/yuin/goldmark/renderer/html"
 	"go.abhg.dev/goldmark/mermaid"
 	"go.abhg.dev/goldmark/wikilink"
@@ -36,7 +37,19 @@ type markdownConverter struct {
 	gm goldmark.Markdown
 }
 
-func newMarkdownConverter(rootDir string) *markdownConverter {
+// newMarkdownConverter builds the goldmark pipeline. Raw HTML in markdown is
+// omitted (and dangerous javascript:/data:/file:/vbscript: URLs filtered) by
+// default; allowRawHTML opts back in to the old pass-through behavior for
+// content the operator trusts. WithUnsafe gates both behaviors in goldmark,
+// so the flag re-enables each of them.
+func newMarkdownConverter(rootDir string, allowRawHTML bool) *markdownConverter {
+	// The slice must be []renderer.Option (not []ghtml.Option): goldmark's
+	// WithRendererOptions takes the wider type and Go won't convert between
+	// the two option slices.
+	var rendererOpts []renderer.Option
+	if allowRawHTML {
+		rendererOpts = append(rendererOpts, ghtml.WithUnsafe())
+	}
 	gm := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,
@@ -51,7 +64,7 @@ func newMarkdownConverter(rootDir string) *markdownConverter {
 			meta.New(),
 		),
 		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
-		goldmark.WithRendererOptions(ghtml.WithUnsafe()),
+		goldmark.WithRendererOptions(rendererOpts...),
 	)
 	return &markdownConverter{gm: gm}
 }

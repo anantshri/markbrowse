@@ -29,6 +29,7 @@ func getVersion() string {
 func main() {
 	port := flag.Int("port", 8080, "port to listen on")
 	cssPath := flag.String("css", "", "path to custom CSS file (replaces built-in stylesheet)")
+	rawHTML := flag.Bool("raw-html", false, "render raw HTML in markdown unescaped and allow javascript:/data: URLs (only for content you trust)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -70,7 +71,7 @@ func main() {
 
 	h := &fileHandler{
 		root:      rootDir,
-		md:        newMarkdownConverter(rootDir),
+		md:        newMarkdownConverter(rootDir, *rawHTML),
 		customCSS: customCSS,
 	}
 

@@ -6,7 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-08-30
+### Changed
+- Raw HTML embedded in markdown is now omitted by default (matching GitHub)
+  and `javascript:`/`vbscript:`/`file:`/`data:` link targets are filtered;
+  `--raw-html` restores the previous pass-through behavior for trusted
+  content.
+
+### Security
+- Fix stored XSS: `<script>`/event-handler HTML in served markdown no longer
+  executes in the viewer's browser (secreports/report1.md findings 1+2).
+
 
 ### Added
 - Client-side table sorting: click any table header (markdown tables and the
