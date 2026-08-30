@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,12 @@ func TestServeTreeIncludesDotDirs(t *testing.T) {
 }
 
 func TestServeHTTPForbiddenOnUnreadableFile(t *testing.T) {
+	// Unix permission bits don't model readability on Windows (chmod 000
+	// only toggles the read-only attribute on files and is a no-op on
+	// directories), so the EACCES path can't be simulated there.
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot simulate unreadable files on windows")
+	}
 	dir := t.TempDir()
 	secret := filepath.Join(dir, "secret.md")
 	if err := os.WriteFile(secret, []byte("# s"), 0o000); err != nil {
@@ -387,6 +394,11 @@ func TestServeDirectoryListingAndIndex(t *testing.T) {
 func TestServeDirectoryForbiddenOnUnreadableDir(t *testing.T) {
 	dir := t.TempDir()
 	blocked := filepath.Join(dir, "blocked")
+	// See TestServeHTTPForbiddenOnUnreadableFile: chmod can't make a
+	// directory unreadable on Windows.
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot simulate unreadable directories on windows")
+	}
 	if err := os.MkdirAll(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}

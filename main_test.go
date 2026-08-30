@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -24,6 +25,11 @@ func TestValidateReadableEmptyDirOK(t *testing.T) {
 }
 
 func TestValidateReadablePermissionDenied(t *testing.T) {
+	// See the handler tests: chmod 000 can't make a directory unreadable
+	// on Windows, so the EACCES path isn't simulatable there.
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot simulate unreadable directories on windows")
+	}
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o000); err != nil {
 		t.Skipf("cannot chmod: %v", err)

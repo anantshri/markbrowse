@@ -9,6 +9,52 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-08-30 — Fix Windows CI failures in permission-denial tests
+
+**Summary:** Three tests that simulate unreadable files/directories via
+`chmod 000` failed on the Windows CI runner (got 200/nil, expected
+403/error). They now skip on Windows — the simulation is impossible there,
+not the behavior broken.
+
+**Why:** Windows doesn't enforce Unix permission bits: `os.Chmod(0o000)`
+on a file only clears/sets the read-only attribute (which affects writes,
+not reads), and on a directory it is effectively a no-op. So the
+"unreadable" fixtures remained readable, the handler correctly served 200,
+and `validateReadable` correctly returned nil. The production 403 mapping
+and startup validation are unchanged — a real Windows ACL denial still
+surfaces as `os.ErrPermission` and maps to 403/the startup error.
+
+**What changed:**
+- `handler_test.go`: `TestServeHTTPForbiddenOnUnreadableFile` and
+  `TestServeDirectoryForbiddenOnUnreadableDir` skip on
+  `runtime.GOOS == "windows"` with an explanatory message.
+- `main_test.go`: `TestValidateReadablePermissionDenied` likewise.
+- No production code touched.
+
+**How / commands run:**
+```
+go vet ./... && go test ./...                 # 42 passed (linux)
+GOOS=windows go vet ./... && GOOS=windows go build ./...
+GOOS=windows go test -c -o /tmp/markbrowse-test.exe .
+GOOS=darwin  go test -c -o /tmp/markbrowse-test-darwin .
+```
+
+**Errors encountered & resolution:** None beyond the diagnosis — the
+cross-compile of the test binary for windows/darwin confirms the skip
+branches compile everywhere.
+
+**Verification:** Full suite 42/42 on Linux; `GOOS=windows` vet + build +
+test-binary compile all succeed, so the Windows runner will compile and
+skip the three tests rather than fail. (Executed Windows runtime behavior
+can't be verified from this Linux container.)
+
+**Notes / follow-ups:** If Windows-native permission behavior ever needs
+real coverage, the test would have to manipulate ACLs (e.g. via
+`icacls`) behind a build tag — out of scope for a test-only skip.
+Folded into the 0.3.0 changelog (release still not cut).
+
+---
+
 ## 2026-08-30 — Fix macOS CI failure in TestListenWithFallback
 
 **Summary:** The test that guards the port-fallback feature failed on

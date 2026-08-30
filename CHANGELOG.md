@@ -33,6 +33,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `:port` — an IPv6 dual-stack wildcard bind coexists with an IPv4-loopback
   holder on macOS/BSD, so the "busy" port was bindable and the fallback
   never triggered there.
+- Permission-denial tests skip on Windows, where Unix permission bits don't
+  model readability (`chmod 000` only toggles the read-only attribute on
+  files and is a no-op on directories), so EACCES can't be simulated; the
+  403/startup-validation code paths themselves are unchanged.
 - Dot directories (e.g. `.obsidian`) now appear in the sidebar tree and
   resolve in wikilinks, provided they contain markdown files (#1).
 - Permission errors now surface as `403 Forbidden` (previously masked as
