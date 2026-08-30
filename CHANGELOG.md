@@ -15,6 +15,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Security
 - Fix stored XSS: `<script>`/event-handler HTML in served markdown no longer
   executes in the viewer's browser (secreports/report1.md findings 1+2).
+- Symlinks inside the served tree can no longer point the server at files
+  outside it: every request path is resolved with `filepath.EvalSymlinks` and
+  must remain under the resolved root (secreports/report1.md finding 3).
+- `.git`, `.hg`, `.svn` and `.bzr` directories are never served, listed in the
+  sidebar, or wikilink-indexed (secreports/report1.md finding 4). Other
+  dot-directories (`.obsidian` vaults) remain browsable.
 
 
 ### Added

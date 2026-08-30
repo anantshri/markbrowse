@@ -172,6 +172,11 @@ func TestServeTreeIncludesDotDirs(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// .git with markdown inside must be skipped outright (VCS dirs are never
+	// listed), not just pruned-as-empty — this is what exercises the SkipDir.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hook.md"), []byte("# hook"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	h := &fileHandler{root: dir}
 	req := httptest.NewRequest(http.MethodGet, "/__mdview/tree.json", nil)
@@ -461,5 +466,300 @@ func TestServeMarkdownEscapesScriptTag(t *testing.T) {
 		// see TestInlineHTMLTextPreserved); the marker proves suppression came
 		// from the renderer rather than an error page.
 		t.Errorf("body should carry the raw-HTML-omitted marker, got:\n%s", body)
+	}
+}
+
+// --- symlink containment + VCS blocking (secreports/report1.md findings 3+4) ---
+
+func TestUnderRoot(t *testing.T) {
+	sep := string(filepath.Separator)
+	tests := []struct {
+		root, p string
+		want    bool
+	}{
+		{"/tmp/vault", "/tmp/vault", true},
+		{"/tmp/vault", "/tmp/vault/notes.md", true},
+		{"/tmp/vault", "/tmp/vault-x/notes.md", false}, // prefix boundary
+		{"/tmp/vault", "/tmp/vaul", false},             // shorter sibling
+		{"/tmp/vault", "/tmp", false},                  // parent
+		{"/tmp/vault", "/etc/passwd", false},
+		{"/", "/etc", true}, // root is "/"
+		{"/", "/etc/passwd", true},
+		{"/tmp/vault", "/tmp/vault" + sep + "sub" + sep + "x", true},
+	}
+	if runtime.GOOS == "windows" {
+		// Backslash paths only parse as separators on Windows; on POSIX they
+		// are ordinary characters and Rel degrades to a ".." result.
+		tests = append(tests,
+			struct {
+				root, p string
+				want    bool
+			}{"C:\\vault", "C:\\vault\\x.md", true},
+			struct {
+				root, p string
+				want    bool
+			}{"C:\\vault", "C:\\vault-x\\x.md", false},
+		)
+	}
+	for _, tt := range tests {
+		if got := underRoot(tt.root, tt.p); got != tt.want {
+			t.Errorf("underRoot(%q, %q) = %v, want %v", tt.root, tt.p, got, tt.want)
+		}
+	}
+}
+
+func TestIsVCSName(t *testing.T) {
+	for _, name := range []string{".git", ".hg", ".svn", ".bzr"} {
+		if !isVCSName(name) {
+			t.Errorf("isVCSName(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"git", ".gitignore", ".github", ".gitx", ".obsidian", ".hidden", "notes.md", ""} {
+		if isVCSName(name) {
+			t.Errorf("isVCSName(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestHasVCSSegment(t *testing.T) {
+	for _, p := range []string{
+		"/.git/config", "/.git/", "/.hg/x", "/.svn/x", "/.bzr/x",
+		"/foo/.git/config", "/a/b/.git/objects/pack/1.pack",
+	} {
+		if !hasVCSSegment(p) {
+			t.Errorf("hasVCSSegment(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"/", "/notes.md", "/.gitignore", "/.github/workflows/ci.yml", "/.obsidian/x.md"} {
+		if hasVCSSegment(p) {
+			t.Errorf("hasVCSSegment(%q) = true, want false", p)
+		}
+	}
+}
+
+func TestServeHTTPRejectsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("# secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.md"), filepath.Join(dir, "leak.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/leak.md", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("symlink escape = %d, want 404", rec.Code)
+	}
+}
+
+func TestServeHTTPRejectsSymlinkDirEscape(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink("/etc", filepath.Join(dir, "etcdir")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	for _, p := range []string{"/etcdir/", "/etcdir/hostname"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", p, rec.Code)
+		}
+	}
+}
+
+func TestServeHTTPAllowsSymlinkInsideRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "real.md"), []byte("# Real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "real.md"), filepath.Join(dir, "alias.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/alias.md", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("internal symlink = %d, want 200", rec.Code)
+	}
+}
+
+func TestServeHTTPRootItselfSymlinked(t *testing.T) {
+	// Encodes the macOS case: temp dirs sit behind /var -> /private/var, so
+	// the root handed to the handler is already "through" a symlink on disk.
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "doc.md"), []byte("# Doc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	h := &fileHandler{root: link, md: newMarkdownConverter(link, false)}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/doc.md", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("doc behind symlinked root = %d, want 200", rec.Code)
+	}
+}
+
+func TestServeDirectoryIndexSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("# secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.md"), filepath.Join(dir, "README.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	// Directory view falls through to the listing, not the escaped file.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dir with hostile README.md = %d, want 200 (listing)", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "# secret") {
+		t.Errorf("directory view leaked escaped index file:\n%s", rec.Body.String())
+	}
+
+	// Direct request to the escaped candidate is blocked too.
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/README.md", nil))
+	if rec2.Code != http.StatusNotFound {
+		t.Errorf("direct GET README.md (escaping symlink) = %d, want 404", rec2.Code)
+	}
+}
+
+func TestServeHTTPNotFoundUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/missing.md", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("missing file = %d, want 404", rec.Code)
+	}
+}
+
+func TestServeHTTPBlocksVCSDirs(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{".git", ".hg", ".svn", ".bzr"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, sub, "config"), []byte("secret=abc123"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, sub, "notes.md"), []byte("# vcs note"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", ".git", "config"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Non-VCS dot-dirs stay browsable.
+	if err := os.MkdirAll(filepath.Join(dir, ".obsidian"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".obsidian", "vault.md"), []byte("# Vault"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	for _, p := range []string{
+		"/.git/config", "/.git/", "/.git/notes.md",
+		"/.hg/config", "/.svn/config", "/.bzr/config",
+		"/sub/.git/config",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", p, rec.Code)
+		}
+	}
+	for _, p := range []string{"/.obsidian/vault.md", "/.gitignore"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200 (non-VCS dot path)", p, rec.Code)
+		}
+	}
+}
+
+func TestServeHTTPBlocksVCSThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "config.md"), []byte("# cfg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Clean URL path, but the target sits inside .git.
+	if err := os.Symlink(filepath.Join(dir, ".git", "config.md"), filepath.Join(dir, "notes.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/notes.md", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("symlink into .git = %d, want 404", rec.Code)
+	}
+}
+
+func TestBuildFileIndexSkipsVCSDirs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hook.md"), []byte("# hook"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".vault", "x.md"), []byte("# x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := buildFileIndex(dir)
+	if _, ok := idx["hook"]; ok {
+		t.Error(".git/hook.md must not be wikilink-indexed")
+	}
+	if p, ok := idx["x"]; !ok || p != "/.vault/x.md" {
+		t.Errorf(".vault/x.md should be indexed at /.vault/x.md, got %q ok=%v", p, ok)
+	}
+}
+
+func TestUnderRootRelError(t *testing.T) {
+	// filepath.Rel errors when root and path mix absolute/relative forms;
+	// underRoot must treat that as "not contained".
+	if underRoot("vault", "/etc/passwd") {
+		t.Error(`underRoot("vault", "/etc/passwd") = true, want false (Rel error)`)
+	}
+	if underRoot("/tmp/vault", "etc/passwd") {
+		t.Error(`underRoot("/tmp/vault", "etc/passwd") = true, want false (Rel error)`)
+	}
+}
+
+func TestResolvedRootDirFallsBackWhenRootMissing(t *testing.T) {
+	// EvalSymlinks fails on a nonexistent root; the fallback keeps the
+	// handler constructible (requests will 404 at os.Stat long before).
+	h := &fileHandler{root: "/nonexistent/markbrowse/root"}
+	if got := h.resolvedRootDir(); got != filepath.Clean("/nonexistent/markbrowse/root") {
+		t.Errorf("resolvedRootDir fallback = %q, want cleaned root", got)
 	}
 }

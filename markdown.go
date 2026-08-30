@@ -181,6 +181,12 @@ func buildFileIndex(rootDir string) fileIndex {
 		if err != nil {
 			return nil
 		}
+		// VCS directories are never indexed (matching the sidebar and the
+		// ServeHTTP block), so a .md inside .git is not wikilink-reachable.
+		// The root itself is exempt so `markbrowse .git` keeps working.
+		if path != rootDir && d.IsDir() && isVCSName(d.Name()) {
+			return filepath.SkipDir
+		}
 		// Dot directories are indexed too, mirroring serveTreeJSON, so
 		// wikilinks resolve consistently with what the sidebar shows.
 		if d.IsDir() {

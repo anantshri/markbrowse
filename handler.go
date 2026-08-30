@@ -24,16 +24,88 @@ type fileHandler struct {
 	treeMu   sync.Mutex
 	treeJSON []byte
 	treeAt   time.Time
+
+	resolveOnce  sync.Once
+	resolvedRoot string
+}
+
+// vcsDirNames are repository-metadata directories that are never served,
+// listed, or indexed: they leak the checkout's contents (.git/config et al.)
+// and never contain markdown the viewer wants.
+var vcsDirNames = map[string]bool{".git": true, ".hg": true, ".svn": true, ".bzr": true}
+
+func isVCSName(name string) bool {
+	return vcsDirNames[name]
+}
+
+// hasVCSSegment reports whether any "/"-separated segment of a URL path is a
+// VCS directory name. Exact segment match only: ".gitignore" and ".github"
+// are files/dirs of their own and stay servable.
+func hasVCSSegment(urlPath string) bool {
+	for _, seg := range strings.Split(urlPath, "/") {
+		if isVCSName(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// underRoot reports whether p is root itself or beneath it. filepath.Rel
+// avoids the classic prefix bug (root "/tmp/vault" matching "/tmp/vault-x")
+// and behaves correctly when root is "/" on either separator style.
+func underRoot(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !filepath.IsAbs(rel)
+}
+
+// resolvedRootDir returns h.root with all symlinks resolved, computed once.
+// Comparing resolved request paths against the resolved root (rather than the
+// raw h.root) keeps containment working when the root itself is reached
+// through a symlink — including macOS temp dirs (/var -> /private/var).
+func (h *fileHandler) resolvedRootDir() string {
+	h.resolveOnce.Do(func() {
+		resolved, err := filepath.EvalSymlinks(h.root)
+		if err != nil {
+			resolved = filepath.Clean(h.root)
+		}
+		h.resolvedRoot = resolved
+	})
+	return h.resolvedRoot
+}
+
+// resolveContained resolves every symlink in fsPath and reports whether the
+// fully-resolved target still sits under the resolved root and outside VCS
+// directories. This is the actual containment check: the lexical checks in
+// ServeHTTP can be bypassed by any symlink inside the served tree.
+func (h *fileHandler) resolveContained(fsPath string) (string, bool) {
+	resolved, err := filepath.EvalSymlinks(fsPath)
+	if err != nil {
+		return "", false
+	}
+	root := h.resolvedRootDir()
+	if !underRoot(root, resolved) {
+		return "", false
+	}
+	// A symlink with a clean name can still land inside a VCS dir
+	// (notes.md -> .git/config.md); apply the same policy to the target.
+	if rel, err := filepath.Rel(root, resolved); err == nil {
+		if hasVCSSegment("/" + filepath.ToSlash(rel)) {
+			return "", false
+		}
+	}
+	return resolved, true
 }
 
 func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	relPath := path.Clean("/" + r.URL.Path)
 	fsPath := filepath.Join(h.root, relPath[1:])
 
-	if !strings.HasPrefix(fsPath, h.root) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
 	if relPath == "/__mdview/mermaid.js" {
 		serveAsset(w, "application/javascript", mermaidJS)
 		return
@@ -59,13 +131,36 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #nosec G304 G703 -- fsPath is joined from h.root and the path.Clean'd request path, then prefix-checked against h.root above
+	// Lexical containment first: path.Clean already strips leading "..", so
+	// this is defense in depth against join/prefix bugs, not the real guard.
+	if !underRoot(h.root, fsPath) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// VCS directories are never served; 404 (not 403) so the response does
+	// not confirm whether the directory exists.
+	if hasVCSSegment(relPath) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// #nosec G304 G703 -- fsPath is joined from h.root and the path.Clean'd request path; existence is checked here and full symlink containment via resolveContained below
 	info, err := os.Stat(fsPath)
 	if err != nil {
 		if os.IsPermission(err) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// The real containment guard: resolve symlinks and require the target to
+	// stay under the resolved root (and out of VCS dirs). os.Stat/Open/ReadFile
+	// all follow symlinks, so the lexical checks above are not sufficient.
+	resolved, ok := h.resolveContained(fsPath)
+	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -77,17 +172,17 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, relPath+"/", http.StatusMovedPermanently)
 			return
 		}
-		h.serveDirectory(w, r, fsPath, relPath)
+		h.serveDirectory(w, r, resolved, relPath)
 		return
 	}
 
 	if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-		h.serveMarkdown(w, r, fsPath, relPath)
+		h.serveMarkdown(w, r, resolved, relPath)
 		return
 	}
 
-	// #nosec G304 G703 -- fsPath validated against h.root above (HasPrefix check on the joined path)
-	f, err := os.Open(fsPath)
+	// #nosec G304 G703 -- resolved path re-validated by resolveContained (EvalSymlinks + underRoot) immediately above
+	f, err := os.Open(resolved)
 	if err != nil {
 		if os.IsPermission(err) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -103,9 +198,17 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
 	for _, name := range []string{"README.md", "readme.md", "INDEX.md", "index.md"} {
 		indexPath := filepath.Join(fsPath, name)
-		// #nosec G304 G703 -- fixed candidate name joined onto fsPath already validated in ServeHTTP
-		if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
-			h.serveMarkdown(w, r, indexPath, relPath)
+		// The candidate itself may be a symlink escaping the tree (README.md
+		// -> /etc/passwd), so run it through the same containment check as
+		// request paths. A rejected candidate falls through to the listing —
+		// a hostile symlink must not break browsing the directory.
+		resolved, ok := h.resolveContained(indexPath)
+		if !ok {
+			continue
+		}
+		// #nosec G304 G703 -- resolved passed resolveContained (EvalSymlinks + underRoot against the resolved root) immediately above
+		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+			h.serveMarkdown(w, r, resolved, relPath)
 			return
 		}
 	}
@@ -166,7 +269,7 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 }
 
 func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
-	// #nosec G304 G703 -- fsPath validated against h.root in ServeHTTP (or built from fixed index names in serveDirectory)
+	// #nosec G304 G703 -- fsPath passed through resolveContained (EvalSymlinks + underRoot) in ServeHTTP, or from the containment-checked index candidates in serveDirectory
 	info, err := os.Stat(fsPath)
 	if err != nil {
 		if os.IsPermission(err) {
@@ -186,7 +289,7 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 		return
 	}
 
-	// #nosec G304 G703 -- fsPath validated against h.root in ServeHTTP before dispatch
+	// #nosec G304 G703 -- fsPath containment-checked via resolveContained before dispatch
 	source, err := os.ReadFile(fsPath)
 	if err != nil {
 		if os.IsPermission(err) {
@@ -310,6 +413,12 @@ func (h *fileHandler) treeJSONCached() []byte {
 	if err := filepath.WalkDir(h.root, func(walkPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
+		}
+		// VCS directories are never listed in the sidebar, even when they
+		// contain markdown. The root itself is exempt so `markbrowse .git`
+		// (serving a VCS dir deliberately) keeps working.
+		if walkPath != h.root && d.IsDir() && isVCSName(d.Name()) {
+			return filepath.SkipDir
 		}
 		// Dot directories are walked like any other so they appear in the
 		// sidebar (e.g. .obsidian vaults); directories with no markdown

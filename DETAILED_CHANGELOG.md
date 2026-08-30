@@ -9,7 +9,74 @@ below; drop sections that genuinely don't apply.
 
 ---
 
----
+## 2026-08-30 — Symlink containment and VCS-dir blocking in the file handler
+
+**Summary:** The root-containment check was purely lexical
+(`strings.HasPrefix(fsPath, h.root)`), but `os.Stat`/`os.Open`/`os.ReadFile`
+follow symlinks — so any symlink planted inside the served tree could serve
+any host file (verified live: a symlink to `/etc/hosts` and a symlinked
+directory exposing all of `/etc`). Separately, `.git/config` and friends were
+served to anyone who could reach the port (secreports/report1.md findings
+3+4, CWE-59/CWE-200).
+
+**Why:** Both findings reproduce byte-for-byte on `db268b3`. The lexical check
+cannot be patched around: following symlinks is the OS default for every file
+API in use, so containment has to happen on the *resolved* path.
+
+**What changed (`handler.go`):**
+- `underRoot(root, p)` — `filepath.Rel`-based containment (no prefix-boundary
+  bug; correct for root `/` and Windows separators). Replaces the `HasPrefix`
+  check as the lexical first gate (still 403).
+- `resolvedRootDir()` — `filepath.EvalSymlinks(h.root)` computed once per
+  handler (`sync.Once`); falls back to `filepath.Clean` if the root vanishes.
+  Comparing resolved-to-resolved is what keeps a symlinked root working —
+  notably macOS temp dirs (`/var` -> `/private/var`), which would otherwise
+  404 every request.
+- `resolveContained(fsPath)` — resolves all symlinks in the request path and
+  requires the target to stay under the resolved root AND outside VCS dirs
+  (a clean-named symlink like `notes.md -> .git/config.md` is caught by the
+  second check). 404 on failure (not 403, to avoid an existence oracle).
+- `ServeHTTP` pipeline order: virtual assets -> lexical `underRoot` -> VCS
+  segment check -> `os.Stat` (preserves the 403/404 mapping for
+  missing/permission-denied) -> `resolveContained` -> dispatch on the
+  *resolved* path (the path validated is the path opened).
+- `serveDirectory` index candidates (`README.md` etc.) now go through
+  `resolveContained` too — `README.md -> /etc/passwd` was a live bypass of
+  the request-path check; a rejected candidate falls through to the listing
+  instead of failing the directory view.
+- `vcsDirNames` (`.git`, `.hg`, `.svn`, `.bzr`) + `isVCSName`/`hasVCSSegment`;
+  exact segment match only, so `.gitignore`/`.github` stay servable.
+- `treeJSONCached` walk and `buildFileIndex` (markdown.go) `SkipDir` on VCS
+  dirs (root itself exempt, so `markbrowse .git` still works). Non-VCS
+  dot-dirs (`.obsidian`, `.hidden`, `.vault`) remain listed/indexed — that
+  behavior is deliberate (Obsidian vaults) and covered by existing tests.
+
+**Behavior notes:** `filepath.EvalSymlinks` also resolves Windows junctions/
+mount points, which lexical checks miss entirely. `filepath.WalkDir` already
+refuses to descend symlinked dirs, so the tree/file-index walks were never
+able to escape; only the request path and index candidates needed the fix.
+
+**Commands and verification:**
+- `go build ./... && go vet ./...` — clean.
+- `go test -cover ./...` — 65 tests pass; 14 new (TestUnderRoot incl.
+  boundary + root-"/" + Rel-error cases, TestUnderRootRelError,
+  TestResolvedRootDirFallsBackWhenRootMissing, TestIsVCSName,
+  TestHasVCSSegment, TestServeHTTPRejectsSymlinkEscape,
+  TestServeHTTPRejectsSymlinkDirEscape, TestServeHTTPAllowsSymlinkInsideRoot,
+  TestServeHTTPRootItselfSymlinked, TestServeDirectoryIndexSymlinkEscape,
+  TestServeHTTPNotFoundUnchanged, TestServeHTTPBlocksVCSDirs,
+  TestServeHTTPBlocksVCSThroughSymlink, TestBuildFileIndexSkipsVCSDirs) +
+  TestServeTreeIncludesDotDirs strengthened to put a `.md` inside `.git`.
+  New helpers at 100% statement coverage.
+- Live PoC re-run: symlink file + symlink dir escapes -> 404; `.git/config`
+  -> 404; `.obsidian`-style dot-dirs -> 200; internal symlinks -> 200.
+
+**Notes:** Rejections use 404 rather than 403 so the response doesn't confirm
+that an out-of-tree target exists. Symlink tests skip on Windows
+(`os.Symlink` needs Developer Mode there), matching the repo's existing
+Windows-skip convention. Residual, accepted: a symlink whose *target* is a
+non-VCS dot-dir inside root is still served under its clean name — inside the
+operator's trust boundary.
 
 ## 2026-08-30 — Omit raw HTML in markdown by default, add --raw-html opt-in
 
