@@ -48,12 +48,17 @@ jobs:
       - name: Package artifact
         env:
           GOOS: ${{ matrix.goos }}
+          # Env-var indirection, never ${{ }} inside run: (GitHub
+          # script-injection guidance); scrubbed because tag names may
+          # legally contain quotes and other shell metacharacters.
+          REF_NAME: ${{ github.ref_name }}
         run: |
+          REF_NAME=$(printf '%s' "$REF_NAME" | tr -c 'A-Za-z0-9._-' '_')
           BINARY=markbrowse
           if [ "$GOOS" = "windows" ]; then
             BINARY=markbrowse.exe
           fi
-          ARCHIVE="markbrowse_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          ARCHIVE="markbrowse_${REF_NAME}_${GOOS}_${GOARCH}"
           mkdir "$ARCHIVE"
           cp "$BINARY" "$ARCHIVE/"
           cp README.md "$ARCHIVE/" 2>/dev/null || true

@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **Default bind changed to `127.0.0.1`** (was `0.0.0.0`). The server is
+  unauthenticated, so it is no longer network-reachable by default; pass
+  `--listen 0.0.0.0` (or a specific address) to expose it. Container port
+  mappings (`-p 8080:8080`) now need `--listen 0.0.0.0`.
+  (secreports/report1.md finding 7)
+- CI/release workflows pass `github.ref_name` through an env var and scrub
+  it before use, instead of interpolating `${{ }}}` into `run:` steps
+  (secreports/report1.md findings 5+6).
 - Raw HTML embedded in markdown is now omitted by default (matching GitHub)
   and `javascript:`/`vbscript:`/`file:`/`data:` link targets are filtered;
   `--raw-html` restores the previous pass-through behavior for trusted
