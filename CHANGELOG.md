@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Table sorting now compares the whole value, not just the first digits:
+  numbers with `%`/unit/symbol attachments (`95%`, `1.2m`, `$1,234`) and
+  version-like values (`8.10.0`) sort numerically instead of dropping into
+  the text branch, and multi-part values are compared component by component
+  so `8x.0` no longer sorts after `9.0` (#19).
+- Directory listings: the `../` row of a first-level directory now links to
+  `/` instead of the `//` protocol-relative URL, and the sorter matches the
+  row by its `../` label, so the parent row really stays pinned above the
+  sorted rows (#19).
+
 ## [0.3.0] - 2026-08-30
 
 ### Added

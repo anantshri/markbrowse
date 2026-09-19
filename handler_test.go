@@ -351,6 +351,37 @@ func TestTemplatesIncludeClientScripts(t *testing.T) {
 	}
 }
 
+func TestServeDirectoryParentRowLink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir)}
+
+	// First-level directory: the parent row must link to the root, never to the
+	// "//" protocol-relative URL that browsers resolve against another host.
+	req := httptest.NewRequest(http.MethodGet, "/sub/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sub status = %d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `<a href="/">../</a>`) {
+		t.Errorf("parent row should link to /, got:\n%s", body)
+	}
+
+	// Deeper directory: the parent row keeps the trailing-slash path.
+	req = httptest.NewRequest(http.MethodGet, "/sub/nested/", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nested status = %d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `<a href="/sub/">../</a>`) {
+		t.Errorf("parent row should link to /sub/, got:\n%s", body)
+	}
+}
+
 func TestServeDirectoryListingAndIndex(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte("# B"), 0o644); err != nil {

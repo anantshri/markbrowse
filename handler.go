@@ -154,7 +154,7 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 		Path:        relPath,
 		CSS:         h.css(),
 		HasParent:   relPath != "/",
-		ParentPath:  path.Dir(relPath) + "/",
+		ParentPath:  parentPath(relPath),
 		Entries:     dirEntries,
 		CurrentPath: relPath + "/",
 	}
@@ -256,6 +256,18 @@ func buildBreadcrumbs(relPath string) []breadcrumb {
 		crumbs = append(crumbs, breadcrumb{Name: parts[i], Path: accumulated + "/"})
 	}
 	return crumbs
+}
+
+// parentPath returns the URL of relPath's parent directory for the "../" row
+// of a directory listing. The root has no trailing-slash form of its own, so
+// path.Dir("/sub") == "/" must stay "/" instead of becoming the "//"
+// protocol-relative URL that browsers resolve to another host.
+func parentPath(relPath string) string {
+	dir := path.Dir(relPath)
+	if dir == "/" {
+		return "/"
+	}
+	return dir + "/"
 }
 
 func formatSize(b int64) string {

@@ -13,7 +13,7 @@ A minimal markdown file viewer. Point it at any directory and it starts a web se
 - Wiki-style `[[link]]` syntax with file-tree resolution
 - GitHub/Obsidian-style admonition callouts (`> [!NOTE]`, `> [!WARNING]`, etc.)
 - YAML front matter rendered as a GitHub-style metadata table, with `title` used as the page title
-- Client-side table sorting (click column headers; numbers, byte sizes, and timestamps sort naturally)
+- Client-side table sorting (click column headers; numbers, byte sizes, timestamps, `%`/unit values, and version-like values sort naturally)
 - Collapsible right-hand table of contents built from the heading hierarchy
 - Custom CSS support to override the built-in stylesheet
 - Breadcrumb navigation on all pages
