@@ -87,6 +87,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   action pins never moved and had drifted a full major behind.
 
 ### Fixed
+- **Alerts lost their icon and title in any CRLF document.** The title parser
+  stripped `\n` from the end of the marker line but not `\r`, so a CRLF file
+  left `"\r"` as the title — non-empty, so the alert took the custom-title
+  branch and rendered with neither icon nor kind name. Every callout in a CRLF
+  vault silently lost its heading, on every platform; Windows CI is simply
+  where it showed up. The line ending is now trimmed as whitespace.
+- A tab immediately after an alert marker (`> [!NOTE]\t`) made the title
+  swallow the following line. `util.IndentWidth` returns a column width and a
+  byte offset, and the code advanced by the width — identical for spaces, but
+  a tab is one byte and up to four columns.
+- `.gitattributes` normalises line endings to LF. Three things here compare
+  bytes rather than lines and all failed on a Windows checkout: the golden
+  files, the anchored regexes that unwrap the JS for the goja tests, and the
+  sha256-pinned mermaid bundle.
+- The served directory is no longer held open. `os.Root` was cached on the
+  handler, which kept a descriptor on the directory for the handler's
+  lifetime — harmless on POSIX, but on Windows it blocks deleting the
+  directory. It is opened per request now; one extra `openat` is not
+  measurable beside the stat and render already being done.
 - Windows CI builds again. The 0.3.0 CI hardening replaced a single-line
   `go build` with a multi-line shell script, but the `build` job runs a
   three-OS matrix and `windows-latest` defaults to PowerShell, where

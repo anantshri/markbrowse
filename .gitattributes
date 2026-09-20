@@ -1,0 +1,15 @@
+# Normalise line endings to LF on checkout, on every platform.
+#
+# Git's Windows default (core.autocrlf=true) rewrites LF to CRLF when checking
+# out, which breaks three things here that compare bytes rather than lines:
+#
+#   - golden/**            compared byte for byte against rendered output
+#   - static/js/*.js       unwrapped by anchored regexes in the goja tests
+#   - static/js/mermaid.min.js  pinned by sha256 in handler_test.go
+#
+# All three failed on the windows-latest CI runner until this file existed.
+* text=auto eol=lf
+
+# The mermaid bundle is a vendored artifact, not source. Never transform it —
+# its sha256 is asserted — and do not try to diff 5 MB of minified JavaScript.
+static/js/mermaid.min.js -text -diff

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -356,4 +357,92 @@ func between(s, open, close string) string {
 		return ""
 	}
 	return rest[:j]
+}
+
+// TestServedDirectoryIsNotHeldOpen guards the reason os.Root is opened per
+// request rather than cached on the handler. An os.Root holds an open
+// directory descriptor and markbrowse has no shutdown path to release one, so
+// caching it kept the served directory open for as long as the handler lived.
+// On Windows that blocks deletion outright: it surfaced on CI as every
+// t.TempDir() cleanup failing with "being used by another process".
+//
+// Two checks, because neither alone has teeth on both platforms:
+//
+//   - no descriptor still points at the directory (Linux, via /proc)
+//   - the directory can actually be removed (the Windows symptom; on POSIX
+//     this passes even with a handle open, so it proves nothing there)
+//
+// Note that counting descriptors would not work: a leaked os.Root is closed by
+// its finalizer, so a count only shows the leak until the GC runs. What matters
+// is whether a handle is held while the handler is still alive, which is
+// exactly what scanning for the directory catches.
+func TestServedDirectoryIsNotHeldOpen(t *testing.T) {
+	// Deliberately not t.TempDir: removal is the thing under test.
+	dir, err := os.MkdirTemp("", "markbrowse-handles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir) // no-op if the real removal below succeeds
+
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"README.md":   "# Root",
+		"sub/deep.md": "# Deep",
+		"pic.png":     "\x89PNG\r\n\x1a\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+	for _, url := range []string{"/README.md", "/", "/sub/", "/pic.png", "/nope.md"} {
+		if rec := get(t, h, url); rec.Code == 0 {
+			t.Fatalf("GET %s produced no response", url)
+		}
+	}
+
+	if runtime.GOOS == "linux" {
+		if held := descriptorsPointingAt(t, dir); held > 0 {
+			t.Errorf("%d descriptor(s) still point at the served directory after serving", held)
+		}
+	}
+
+	// The handler is still reachable here on purpose: a cached os.Root would
+	// still be alive, and this is what Windows refuses.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("cannot remove the served directory while the handler is alive: %v", err)
+	}
+	runtime.KeepAlive(h)
+}
+
+// descriptorsPointingAt counts open descriptors whose target is at or below
+// dir. Symlinks are resolved so a temp dir reached through one (macOS /var)
+// still matches, though only Linux has /proc/self/fd to read.
+func descriptorsPointingAt(t *testing.T, dir string) int {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		resolved = dir
+	}
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skipf("cannot read /proc/self/fd: %v", err)
+	}
+
+	n := 0
+	for _, e := range entries {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		if err != nil {
+			continue // the descriptor for the ReadDir above closes under us
+		}
+		if target == resolved || strings.HasPrefix(target, resolved+string(filepath.Separator)) {
+			t.Logf("descriptor %s -> %s", e.Name(), target)
+			n++
+		}
+	}
+	return n
 }

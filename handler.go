@@ -34,13 +34,10 @@ type fileHandler struct {
 
 	resolveOnce  sync.Once
 	resolvedRoot string
-
-	rootOnce  sync.Once
-	fsRoot    *os.Root
-	fsRootErr error
 }
 
-// openRoot returns an os.Root confined to the served directory, opened once.
+// openRoot returns an os.Root confined to the served directory. The caller
+// closes it.
 //
 // os.Root is the containment guarantee: its methods refuse any name that
 // resolves outside the root, including through symlinks, and the refusal is
@@ -50,12 +47,14 @@ type fileHandler struct {
 // path handed to a filesystem call is no longer something that has to be
 // proven safe by reading the surrounding code.
 //
-// It is opened lazily so a zero-value fileHandler is still usable.
+// It is opened per request rather than cached on the handler. An os.Root holds
+// an open directory descriptor, and markbrowse has no shutdown path to release
+// one: a cached handle would leak for the process lifetime, and on Windows an
+// open directory handle blocks deletion of the directory outright. One extra
+// openat per request is not measurable next to the stat and render the request
+// already does.
 func (h *fileHandler) openRoot() (*os.Root, error) {
-	h.rootOnce.Do(func() {
-		h.fsRoot, h.fsRootErr = os.OpenRoot(h.root)
-	})
-	return h.fsRoot, h.fsRootErr
+	return os.OpenRoot(h.root)
 }
 
 // maxSymlinkHops bounds the absolute-symlink rewriting in statInRoot.
@@ -282,6 +281,7 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	defer root.Close()
 
 	info, name, err := h.statInRoot(root, rootName(relPath))
 	if err != nil {
@@ -308,12 +308,12 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, relPath+"/", http.StatusMovedPermanently)
 			return
 		}
-		h.serveDirectory(w, r, name, relPath)
+		h.serveDirectory(w, r, root, name, relPath)
 		return
 	}
 
 	if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-		h.serveMarkdown(w, r, name, relPath, relPath)
+		h.serveMarkdown(w, r, root, name, relPath, relPath)
 		return
 	}
 
@@ -429,13 +429,7 @@ func newNonce() (string, error) {
 
 // serveDirectory renders a directory. dirName is the directory's name relative
 // to the served root, as os.Root methods take it.
-func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, dirName, relPath string) {
-	root, err := h.openRoot()
-	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
+func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, root *os.Root, dirName, relPath string) {
 	for _, name := range []string{"README.md", "readme.md", "INDEX.md", "index.md"} {
 		indexName := filepath.Join(dirName, name)
 		indexPath := filepath.Join(h.root, indexName)
@@ -452,7 +446,7 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, dir
 		if info, effective, err := h.statInRoot(root, indexName); err == nil && !info.IsDir() {
 			// path.Join keeps the root case right: "/" + "README.md" is
 			// "/README.md", not "//README.md".
-			h.serveMarkdown(w, r, effective, relPath, path.Join(relPath, name))
+			h.serveMarkdown(w, r, root, effective, relPath, path.Join(relPath, name))
 			return
 		}
 	}
@@ -529,13 +523,7 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, dir
 // against to highlight and reveal it. The last two differ when a directory
 // serves its index: the request is for /guides/ but the file on screen is
 // /guides/README.md, and the sidebar has a node only for the latter.
-func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fileName, relPath, currentPath string) {
-	root, err := h.openRoot()
-	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
+func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, root *os.Root, fileName, relPath, currentPath string) {
 	info, fileName, err := h.statInRoot(root, fileName)
 	if err != nil {
 		if os.IsPermission(err) {

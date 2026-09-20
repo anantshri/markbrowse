@@ -203,14 +203,18 @@ func (b *alertTitleParser) Open(parent ast.Node, reader text.Reader, _ parser.Co
 	}
 
 	line, _ := reader.PeekLine()
-	w, _ := util.IndentWidth(line, reader.LineOffset())
-	reader.Advance(w)
+	// IndentWidth returns (column width, byte offset). Advance takes bytes, so
+	// it needs the second value: a tab is one byte but up to four columns, and
+	// advancing by the width overshoots the line ending into the alert's body.
+	_, indentEnd := util.IndentWidth(line, reader.LineOffset())
+	reader.Advance(indentEnd)
 
 	_, segment := reader.Position()
-	line, _ = reader.PeekLine()
-	if len(line) > 0 && line[len(line)-1] == '\n' {
-		segment.Stop--
-	}
+	// Trim the whole line ending, not just "\n". A CRLF document leaves "\r"
+	// behind, which is non-empty, so the alert takes the custom-title branch
+	// with a title of "\r" — rendering no icon and no kind name. Every alert
+	// in a CRLF vault silently loses its heading that way.
+	segment = segment.TrimRightSpace(reader.Source())
 
 	if segment.Len() == 0 {
 		// No custom title: the renderer draws the icon and the kind.

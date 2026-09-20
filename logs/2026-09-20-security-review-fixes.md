@@ -265,3 +265,117 @@ firmer ground. Note `filepath.EvalSymlinks` was never flagged despite
 predating this work, which is what suggested their query pack models
 `os.Open`/`os.Stat` but not symlink resolution — and is why `resolveContained`
 could stay.
+
+---
+
+## Follow-up: Windows CI, once it actually ran
+
+Pinning the build job to bash let `windows-latest` get as far as `go test`,
+which then surfaced four problems. Two were real bugs, one was mine from the
+`os.Root` change, one was repo hygiene.
+
+### 1. Alerts lost their icon and title in CRLF documents
+
+Every golden comparison involving a callout showed:
+
+```
+want: <p class="markdown-alert-title">[ICON]Note</p>
+got:  <p class="markdown-alert-title"></p>
+```
+
+Not a line-ending artifact in the comparison — a genuine rendering bug.
+`alertTitleParser.Open` trimmed the line ending with:
+
+```go
+if len(line) > 0 && line[len(line)-1] == '\n' { segment.Stop-- }
+```
+
+On CRLF that leaves `"\r"`, which is non-empty, so the alert took the
+custom-title branch with a title of `"\r"`: no icon, no kind name. Reproduced
+locally before fixing:
+
+```
+LF               title="<svg id=\"note\"></svg>Note"
+CRLF             title=""
+LF titled        title="Custom"
+CRLF titled      title="Custom"
+```
+
+This affects any CRLF vault on any platform, not just Windows CI. Fixed with
+`segment.TrimRightSpace(reader.Source())`, which is what goldmark's own parsers
+use. Inherited from upstream goldmark-gh-alerts; ours now.
+
+### 2. A tab after the marker swallowed the next line
+
+Writing the CRLF test turned up a second one: `> [!WARNING]\t` rendered as
+`<p class="markdown-alert-title"> Body.</p>` — the title ate the body.
+
+`util.IndentWidth(line, pos)` returns `(width, pos)`. The code took the first
+and passed it to `reader.Advance`, which counts bytes. Spaces make the two
+equal, so it was invisible; a tab is one byte and up to four columns, so it
+advanced past the line ending. Now advances by the byte offset.
+
+### 3. The served directory was held open — mine
+
+Every `t.TempDir()` cleanup failed:
+
+```
+TempDir RemoveAll cleanup: unlinkat C:\...\001:
+  The process cannot access the file because it is being used by another process.
+```
+
+The `os.Root` was cached on the handler behind a `sync.Once`, so it held a
+descriptor on the served directory for the handler's lifetime. Harmless on
+POSIX; Windows refuses to delete a directory with an open handle.
+
+Opened per request now, closed with `defer`. markbrowse has no shutdown path,
+so a cached handle had nothing to release it, and one extra `openat` per
+request is not measurable beside the stat and render already happening.
+
+**The first test written for this was vacuous.** It counted `/proc/self/fd`
+before and after 1,000 requests — and passed even with the `defer root.Close()`
+deleted, because a leaked `os.Root` is closed by its finalizer, so a count only
+sees the leak until the GC runs. What matters is whether a handle is held while
+the handler is *alive*. Replaced with a test that scans `/proc/self/fd` for a
+descriptor pointing at the served directory, plus a `RemoveAll` of it while the
+handler is still reachable (the Windows symptom). Verified it bites by
+restoring the cached version:
+
+```
+security_test.go:408: descriptor 6 -> /tmp/markbrowse-handles639564187
+security_test.go:409: 1 descriptor(s) still point at the served directory after serving
+--- FAIL: TestServedDirectoryIsNotHeldOpen
+```
+
+### 4. Line endings
+
+`core.autocrlf` is on by default on Windows runners, so the checkout rewrote
+LF to CRLF. Three things here compare bytes, not lines, and all broke:
+
+| | Symptom |
+|---|---|
+| `golden/**` | every case "differs" while printing identically |
+| `static/js/*.js` | "tablesort.js is no longer a bare IIFE" — the `$`-anchored unwrap regexes do not match before `\r` |
+| `static/js/mermaid.min.js` | sha256 `0080945a…` instead of the pinned `28fca7ae…` |
+
+Added `.gitattributes` with `* text=auto eol=lf`, and `-text -diff` for the
+mermaid bundle (a hashed artifact, and 5 MB of minified JS is not worth
+diffing). `git add --renormalize .` staged nothing beyond the day's real edits,
+confirming the repo was already all-LF. The IIFE regexes also gained `\r?`, so
+that failure mode cannot recur with a message pointing at the wrong thing.
+
+### Verification
+
+- Full suite green; `go test -count=2 -shuffle=on ./...` stable over repeated
+  runs. Coverage 78.6% -> **79.0%**.
+- `go build` + `go vet` (tests included) pass for `windows/amd64`,
+  `darwin/arm64`, `linux/amd64`.
+- `aidc-scan` clean.
+
+### Notes
+
+- One CI difference is *not* a bug and was left alone: with CRLF input goldmark
+  renders a code span spanning a line break as `<code>304 Not\n Modified</code>`
+  rather than collapsing the break to a space. That is goldmark's own CRLF
+  handling, it no longer arises here now that checkouts are LF, and it is
+  cosmetic in a CRLF vault.

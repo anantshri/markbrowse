@@ -14,9 +14,13 @@ import (
 // evaluate the body in a JS engine's global scope, which keeps them running
 // against the exact bytes embedded into the binary instead of a Go
 // re-implementation that could drift from the shipped asset.
+// \r? so a CRLF checkout does not turn "the script changed shape" into the
+// reported failure. .gitattributes should prevent that, but the message this
+// produces otherwise ("no longer a bare IIFE") sends the reader hunting in
+// entirely the wrong place.
 var (
-	iifeOpen  = regexp.MustCompile(`(?m)^\(function \(\) \{$`)
-	iifeClose = regexp.MustCompile(`(?m)^\}\)\(\);$`)
+	iifeOpen  = regexp.MustCompile(`(?m)^\(function \(\) \{\r?$`)
+	iifeClose = regexp.MustCompile(`(?m)^\}\)\(\);\r?$`)
 )
 
 // Just enough of the DOM for init() to be a no-op, plus helpers that drive the
