@@ -1,0 +1,22 @@
+# gitleaks configuration for markbrowse.
+#
+# Starts from gitleaks' own rule set and narrows it in exactly one place.
+
+[extend]
+useDefault = true
+
+# static/js/mermaid.min.js is the mermaid distribution bundle, vendored
+# verbatim from npm. It is ~5 MB of minified JavaScript, so the entropy-based
+# generic-api-key rule fires on ordinary minified assignments — the current hit
+# is `v=g.atlasCount`, which is a variable, not a credential.
+#
+# Excluding it is safe because the file's integrity is asserted by other means:
+# TestMermaidAssetIsTheVendoredBundle in handler_test.go pins its sha256 to the
+# published npm artifact, so nothing — secret or otherwise — can be edited into
+# it without failing a test. The narrow rule list is deliberate: a real
+# high-confidence credential (an AWS key, a private key block) in this file
+# would still be reported.
+[[allowlists]]
+description = "Vendored minified mermaid bundle: entropy false positives in minified JS"
+targetRules = ["generic-api-key"]
+paths = ['''^static/js/mermaid\.min\.js$''']

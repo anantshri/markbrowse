@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **Migrated to goldmark v2**, and the four markdown extensions are now
+  vendored under `internal/` instead of imported. goldmark v2 removed the
+  `goldmark.Extender` interface the upstream extensions implement, and none of
+  them has a v2 release, so each was ported and trimmed to what markbrowse
+  actually uses. Rendering is unchanged: all 44 golden cases produce
+  byte-identical HTML. The module now depends on two libraries at runtime
+  (`goldmark/v2` and `yaml.v2`) instead of six.
+  - `internal/wikilink` — from `go.abhg.dev/goldmark/wikilink` (BSD-3-Clause)
+  - `internal/mermaid` — from `go.abhg.dev/goldmark/mermaid` (BSD-3-Clause),
+    ~85% smaller: the mermaid-CLI and headless-Chrome rendering backends are
+    gone, along with the chromedp dependency tree
+  - `internal/alerts` — from `goldmark-gh-alerts` (MIT)
+  - `internal/frontmatter` — from `goldmark-meta` (MIT), parser only
+
 - **Default bind changed to `127.0.0.1`** (was `0.0.0.0`). The server is
   unauthenticated, so it is no longer network-reachable by default; pass
   `--listen 0.0.0.0` (or a specific address) to expose it. Container port
@@ -42,6 +56,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   action pins never moved and had drifted a full major behind.
 
 ### Security
+- The front matter YAML parse error, which is emitted as an HTML comment when
+  a metadata block fails to parse, can no longer close that comment early:
+  `-->` is escaped out of the message. Error text is partly derived from
+  document content, and the upstream extension interpolated it verbatim.
+- The alert kind is HTML-escaped before it reaches the `class` attribute. The
+  marker syntax already restricts it to word characters, so this closes the
+  shape of the hole rather than a reachable one.
 - Fix stored XSS: `<script>`/event-handler HTML in served markdown no longer
   executes in the viewer's browser (secreports/report1.md findings 1+2).
 - Symlinks inside the served tree can no longer point the server at files
@@ -65,6 +86,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sorted rows (#19).
 
 ### Added
+- `golden/`: golden-file coverage for the markdown pipeline. Every document in
+  `testdata/` plus 12 synthetic cases (all wikilink forms, all alert kinds,
+  mermaid fences, front matter including malformed input, GFM, raw HTML, and
+  the dangerous URL schemes) is rendered in both `--raw-html` modes and
+  compared. Regenerate with `go test -run TestRenderGolden -update-golden`.
+- Unit tests for each vendored extension, at 90–95% statement coverage.
 - `tablesort_test.go`: the embedded `static/js/tablesort.js` is now executed
   in a JS engine from `go test`, covering ascending and descending order for
   every value shape the sorter supports and the `../` row detection.

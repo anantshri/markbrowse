@@ -77,6 +77,40 @@ count: 3
 Body after front matter.
 `,
 
+	// Malformed YAML: the block stays in the document rather than becoming a
+	// metadata table, which is the behaviour to preserve across the port.
+	"frontmatter-malformed": `---
+title: [unclosed
+  bad: : :
+---
+
+Body after broken front matter.
+`,
+
+	// Non-string keys and nested values exercise the ordered-items decoding
+	// that the metadata table walks.
+	"frontmatter-odd-types": `---
+1: numeric key
+true: bool key
+nested:
+  a: 1
+  b: 2
+empty:
+---
+
+Body.
+`,
+
+	// Front matter must only be recognised at the very top of a document.
+	"frontmatter-not-first": `Intro paragraph.
+
+---
+title: Not front matter
+---
+
+Body.
+`,
+
 	"gfm": `| Col | Num |
 |---|---:|
 | a | 1 |

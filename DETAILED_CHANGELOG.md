@@ -9,6 +9,161 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-09-20 — goldmark v2, with the markdown extensions vendored into internal/
+
+**Summary:** markbrowse now parses and renders with `github.com/yuin/goldmark/v2`.
+The four markdown extensions it depended on were ported into `internal/` and
+trimmed to what markbrowse uses. Rendering did not change: all 44 golden cases
+produce byte-identical HTML before and after. The runtime module list drops
+from six to two.
+
+**Why now:** the 2026-08-29 session recorded goldmark v2 as blocked because
+`goldmark-meta/v2` required Go ≥ 1.25 and the other extensions had no v2. The
+Go constraint is gone (the module is on 1.26), but the extension one is not
+and will not resolve on its own: `goldmark-gh-alerts`,
+`go.abhg.dev/goldmark/mermaid` and `go.abhg.dev/goldmark/wikilink` have no v2
+module path at all — `go list -m .../v2@latest` returns 404 / "no matching
+versions" — and their extenders implement the v1 `goldmark.Extender`
+interface, which v2 removed outright. There is no version of this that is a
+dependency bump.
+
+**Why vendoring is a reduction, not just a relocation:** markbrowse uses a
+narrow slice of each package.
+
+| Package | Upstream | Vendored | What was dropped |
+|---|---|---|---|
+| mermaid | 1,128 LOC, 17 files | ~150, 1 file | chromedp server rendering (`mermaidcdp/`), mermaid-CLI rendering, `RenderMode` switching, the CDN `<script>` injection, internal test helpers |
+| wikilink | 403, 6 files | ~260, 1 file | `DefaultResolver` and its `.html` suffix logic — markbrowse resolves against its own file index |
+| gh-alerts | 385, 7 files | ~290, 1 file | the `Extend` wrapper; `details` and `summary` merged into one package |
+| goldmark-meta | 299 (v2), 1 file | ~200, 1 file | the table renderer (markbrowse builds its own) and the unordered-map decode |
+
+Dropping upstream mermaid also removes `chromedp`, `cdproto`, `gobwas/*`,
+`go-json-experiment/json` and friends from the module graph.
+
+`internal/` is load-bearing here, not cosmetic: Go refuses to let any other
+module import a package under an `internal/` directory, so these cannot become
+an accidental public API. That was the explicit requirement.
+
+**Licensing:** wikilink and mermaid are BSD-3-Clause (© 2023 Abhinav Gupta),
+gh-alerts is MIT (© 2024 Adam Chovanec), goldmark-meta is MIT (© 2019 Yusuke
+Inuzuka). All permit modification and redistribution provided the copyright
+notice and licence text travel with the code, so each `internal/<pkg>/`
+directory keeps the upstream `LICENSE` verbatim, and every package comment
+names its origin and lists what diverged. `internal/README.md` records the
+policy. `aidc-scan`'s licence gate passes.
+
+**The migration, concretely.** goldmark v2 is a rewrite of the public API, not
+a rename. What actually had to change:
+
+- `goldmark.New`/`goldmark.Markdown`/`goldmark.Extender` no longer exist.
+  `markdownConverter` now holds a `parser.Parser` and an `html.Renderer` and
+  drives `Parse` then `Render` itself. One incidental win: `metaTitleOf` used
+  to render the whole document into a throwaway buffer just to reach the
+  parser context, and now only parses.
+- Extensions split in two. Each vendored package exposes `NewParser()`
+  (a `parser.Extension`) and `NewHTMLRenderer()` (an `html.Extension`), which
+  is the naming convention goldmark v2's own extensions use.
+- Renderers are generic over the writer. `RegisterFuncs(registerer)` became
+  `html.WithNodeRenderers(map[ast.NodeKind]html.NodeRenderer)`, and the render
+  signature gained a `renderer.Context` and takes `io.Writer`.
+- `ast.BaseNode.Init(n)` must be called in every node constructor, or the
+  argument-free tree mutators have no self reference.
+- `ast.FencedCodeBlock` merged into `ast.CodeBlock`; the mermaid transformer
+  now checks `CodeBlockKind == CodeBlockKindFenced` explicitly so an indented
+  block is never mistaken for a diagram, and `Language()` returns
+  `(string, bool)` rather than `[]byte`.
+- `ast.TextBlock` was removed. Both `goldmark-meta` and the alerts summary
+  parser used it to hold text destined for inline parsing; in v2 a block node's
+  own `AppendSource(segment)` is what gets inline-parsed, which removed a node
+  from each.
+- `ast.String` was removed, so `writeNodeText` in wikilink lost a case.
+- `text.Reader.Value(seg)` is gone; `seg.Bytes(reader.Source())` replaces it.
+- `util.URLEscape` lost its second argument.
+- Non-string AST attributes are gone. gh-alerts stored the alert kind as a
+  `[]byte` attribute and the collapsed flag as a `bool`; both became typed
+  struct fields on the node, which also removed the `t.([]uint8)` assertions
+  the renderers were doing.
+
+**Three deliberate behaviour changes, each tested:**
+
+1. *wikilink drops a `sync.Map`.* Upstream tracked "did this node open an
+   `<a>`?" in a `sync.Map` keyed by node pointer, written on enter and drained
+   on exit. Recomputing it on exit is cheaper and, more importantly,
+   stateless — a renderer holding per-node state cannot be shared across
+   concurrent renders, and markbrowse renders on every request from a single
+   converter. `TestNoStrayClosingTag` covers the tag balance.
+2. *The front matter error comment is sanitised.* Upstream interpolates the
+   YAML error into `<!-- %s -->` verbatim. YAML error text quotes the input
+   that produced it, so `-->` is now escaped out of the message before it is
+   written. `TestErrorCommentCannotBeClosedEarly` covers it.
+3. *The alert kind is HTML-escaped into its `class` attribute.* Upstream used
+   `fmt.Sprintf` straight into the attribute. The marker regexp restricts the
+   kind to `\w+`, so this was not reachable; it is closed at the sink anyway.
+
+**Testing.** The migration was done against a golden-file net captured *first*,
+on goldmark v1 (commit `3d33864`), so any rendering change had to appear as a
+diff rather than as silence: every markdown file in `testdata/` plus 12
+synthetic cases — all wikilink forms including malformed ones, all alert kinds
+plus titled/collapsed/unknown, mermaid fences beside non-mermaid fences, front
+matter including malformed and odd-typed input, GFM, raw HTML, and the
+dangerous URL schemes — rendered in both `--raw-html` modes. 44 files.
+
+Exactly one differed on first run: a missing `\n` after the front matter error
+comment, because goldmark v1's `renderTextBlock` writes a newline on exit when
+the node has children and a next sibling, and the replacement node did not.
+Porting that rule made all 44 byte-identical. The pre-existing test suite
+needed no changes at all.
+
+Each vendored package then got its own unit tests, at 90.9% (alerts), 94.8%
+(frontmatter), 92.7% (mermaid) and 94.9% (wikilink) statement coverage. The
+only uncovered functions are the empty `Close` methods the
+`parser.BlockParser` interface requires; goldmark does call them on every
+block, but an empty body has no statements for the cover tool to count.
+
+**Commands:**
+```
+go get github.com/yuin/goldmark/v2@v2.1.5
+go test -run TestRenderGolden -update-golden     # on v1, before the migration
+# ... port the four packages, rewrite the pipeline in markdown.go ...
+go mod tidy
+gofmt -l . && go vet ./... && go test -cover ./...
+aidc-scan
+```
+
+goldmark v2 ships its own migration material at
+`.agent-plugins/migrate-goldmark-v1-to-v2/` in the upstream repo — a
+breaking-changes reference and an extension-authoring guide. Both were used
+here and are worth reading before touching these packages again.
+
+**gitleaks configuration.** The scan flagged `v=g.atlasCount` inside
+`static/js/mermaid.min.js` as a `generic-api-key` — an entropy false positive
+on minified JavaScript. Added `.gitleaks.toml` allowlisting the
+`generic-api-key` rule for that one path. The scope was verified rather than
+assumed: the same payload is still caught outside that file, and a private key
+block *inside* it is still caught. The file's integrity is asserted separately
+by the sha256 pin in `TestMermaidAssetIsTheVendoredBundle`, so nothing can be
+edited into it without failing a test.
+
+**Notes / follow-ups:**
+- `gopkg.in/yaml.v2` stays. Vendoring the front matter parser does now unblock
+  moving to the maintained `go.yaml.in/yaml/v3` — the `goldmark-meta` v1
+  dependency on `yaml.MapSlice` was the reason it could not move — but that is
+  a separate change with its own golden diff, and mixing it into a goldmark
+  migration would make both harder to attribute. `goldmark-meta/v2` remains
+  the wrong answer regardless: it pulls `go.yaml.in/yaml/v4`, which has only
+  release candidates.
+- What is *not* verified: nothing here renders a mermaid diagram in a browser,
+  so the mermaid 12 rendering question from the previous entry is still open.
+  This change does not touch that path beyond emitting the same
+  `<pre class="mermaid">` markup as before.
+- The cost side of this decision is real and should be stated: markbrowse now
+  owns CommonMark conformance for two hand-written parsers and will not
+  receive upstream fixes. `internal/alerts`'s `scanQuoteMarker` is the piece to
+  watch — it is derived from goldmark's own blockquote parser, so it has to
+  keep agreeing with goldmark about where a blockquote line begins.
+
+---
+
 ## 2026-09-20 — Bring every pinned dependency to latest (Go modules, Actions, gosec/syft/grype, mermaid 12)
 
 **Summary:** A full sweep for "latest version" across every kind of pin in the

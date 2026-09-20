@@ -98,10 +98,27 @@ do this for content you trust, since it re-enables both.
 
 ## Dependencies
 
-- [goldmark](https://github.com/yuin/goldmark) — markdown rendering with GFM extension
-- [goldmark/mermaid](https://go.abhg.dev/goldmark/mermaid) — mermaid diagram support
-- [goldmark/wikilink](https://go.abhg.dev/goldmark/wikilink) — `[[wiki link]]` parsing
-- [gm-alert-callouts](https://github.com/zmtcreative/gm-alert-callouts) — `> [!NOTE]` admonition callouts
+Two modules at runtime:
+
+- [goldmark/v2](https://github.com/yuin/goldmark) — markdown parsing and HTML rendering, with the GFM extension
+- [yaml.v2](https://gopkg.in/yaml.v2) — YAML front matter decoding
+
+Plus [goja](https://github.com/dop251/goja) for tests only, which runs the
+bundled JavaScript under `go test`.
+
+### Vendored extensions
+
+The markdown extensions live in `internal/` rather than being imported. They
+are trimmed to what markbrowse uses and ported to goldmark v2, whose extension
+API the upstream versions do not yet support. Each directory keeps the original
+`LICENSE`, and the package doc lists what was changed.
+
+| Package | Ported from | License |
+|---|---|---|
+| `internal/wikilink` | [go.abhg.dev/goldmark/wikilink](https://go.abhg.dev/goldmark/wikilink) | BSD-3-Clause, © Abhinav Gupta |
+| `internal/mermaid` | [go.abhg.dev/goldmark/mermaid](https://go.abhg.dev/goldmark/mermaid) | BSD-3-Clause, © Abhinav Gupta |
+| `internal/alerts` | [goldmark-gh-alerts](https://github.com/thiagokokada/goldmark-gh-alerts) | MIT, © Adam Chovanec |
+| `internal/frontmatter` | [goldmark-meta](https://github.com/yuin/goldmark-meta) | MIT, © Yusuke Inuzuka |
 
 ## Changelog
 
