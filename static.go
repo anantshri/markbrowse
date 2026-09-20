@@ -108,6 +108,16 @@ body.toc-collapsed #toc-toggle{right:12px}
 body.sidebar-collapsed .mdview-sidebar{width:0;min-width:0;overflow:hidden;border-right:none}
 body.sidebar-collapsed #sidebar-toggle{left:12px}
 .tree-root{padding:8px 0}
+.sidebar-filter{padding:8px 12px;border-bottom:1px solid var(--borderColor-default,#d1d9e0)}
+#tree-filter{width:100%;box-sizing:border-box;padding:5px 8px;font-size:13px;font-family:inherit;color:var(--fgColor-default,#1f2328);background:var(--bgColor-default,#fff);border:1px solid var(--borderColor-default,#d1d9e0);border-radius:6px}
+#tree-filter:focus{outline:2px solid var(--focus-outlineColor,#0969da);outline-offset:-1px}
+#tree-filter:disabled{opacity:.6;cursor:progress}
+.tree-status{display:none;padding:6px 12px;font-size:12px;color:var(--fgColor-muted,#59636e)}
+.tree-match{background:var(--bgColor-attention-muted,#fff8c5);color:var(--fgColor-default,#1f2328);border-radius:2px}
+.tree-result{padding-top:2px}
+.tree-result+.tree-result{border-top:1px solid var(--borderColor-muted,rgba(209,217,224,.7))}
+.tree-result-path{font-size:11px;color:var(--fgColor-muted,#59636e);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:4px}
+.tree-result .tree-file{padding-top:1px;padding-bottom:5px}
 .tree-folder{display:block;width:100%;text-align:left;background:none;border:none;padding:5px 12px;font-size:14px;font-family:inherit;cursor:pointer;color:var(--fgColor-default,#1f2328);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tree-folder:hover{background:var(--bgColor-neutral-muted,rgba(31,35,40,0.04))}
 .tree-folder::before{content:"\25B6";display:inline-block;width:16px;font-size:10px;transition:transform .15s ease;margin-right:4px;color:var(--fgColor-muted,#59636e)}

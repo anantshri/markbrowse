@@ -20,7 +20,7 @@ func BenchmarkTreeBuild(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		h := &fileHandler{root: dir}
-		if h.treeJSONCached() == nil {
+		if data, _ := h.treeJSONCached(); data == nil {
 			b.Fatal("nil tree")
 		}
 	}
@@ -40,7 +40,7 @@ func BenchmarkTreeJSONCached(b *testing.B) {
 	h.treeJSONCached() // warm the cache once
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if h.treeJSONCached() == nil {
+		if data, _ := h.treeJSONCached(); data == nil {
 			b.Fatal("nil tree")
 		}
 	}
@@ -48,7 +48,7 @@ func BenchmarkTreeJSONCached(b *testing.B) {
 
 // BenchmarkConvert measures markdown rendering, which runs per page view.
 func BenchmarkConvert(b *testing.B) {
-	md := newMarkdownConverter(b.TempDir())
+	md := newMarkdownConverter(b.TempDir(), false)
 	src := []byte("# Title\n\nSome **bold** text with a [link](http://example.com).\n\n> [!NOTE]\n> A callout here.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

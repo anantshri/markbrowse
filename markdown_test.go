@@ -8,7 +8,7 @@ import (
 
 func TestMarkdownConvert(t *testing.T) {
 	dir := t.TempDir()
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	tests := []struct {
 		name  string
@@ -41,7 +41,7 @@ func TestWikilinkResolution(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "target.md"), []byte("# Target"), 0644)
 	os.WriteFile(filepath.Join(dir, "notes", "deep.md"), []byte("# Deep"), 0644)
 
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	got, err := md.convert([]byte("see [[target]] for info"))
 	if err != nil {
@@ -62,7 +62,7 @@ func TestWikilinkResolution(t *testing.T) {
 
 func TestBrokenWikilink(t *testing.T) {
 	dir := t.TempDir()
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	got, err := md.convert([]byte("see [[nonexistent]] for info"))
 	if err != nil {
@@ -84,7 +84,7 @@ func contains(s, substr string) bool {
 
 func TestFrontMatterRenderedAsTable(t *testing.T) {
 	dir := t.TempDir()
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	src := "---\ntitle: Case Assignment Memo\nclassification: Internal Use Only\ncase_id: BBT-2026-001\n---\n\n# ByteBrew\n\nBody text."
 	got, err := md.convert([]byte(src))
@@ -116,7 +116,7 @@ func TestFrontMatterRenderedAsTable(t *testing.T) {
 
 func TestNoFrontMatterNoTable(t *testing.T) {
 	dir := t.TempDir()
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	got, err := md.convert([]byte("# Just a heading\n\nText."))
 	if err != nil {
@@ -129,7 +129,7 @@ func TestNoFrontMatterNoTable(t *testing.T) {
 
 func TestFrontMatterValueTypes(t *testing.T) {
 	dir := t.TempDir()
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	src := "---\ndraft: false\ncount: 42\ntags:\n  - one\n  - two\n---\n\n# H\n"
 	got, err := md.convert([]byte(src))
@@ -149,7 +149,7 @@ func TestFrontMatterValueTypes(t *testing.T) {
 
 func TestFrontMatterHTMLEscaping(t *testing.T) {
 	dir := t.TempDir()
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	src := "---\ntitle: \"<script>alert(1)</script>\"\n---\n\n# H\n"
 	got, err := md.convert([]byte(src))
@@ -166,7 +166,7 @@ func TestFrontMatterHTMLEscaping(t *testing.T) {
 
 func TestMetaTitle(t *testing.T) {
 	dir := t.TempDir()
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 
 	if got := md.metaTitleOf([]byte("---\ntitle: Hello World\n---\n\n# H")); got != "Hello World" {
 		t.Errorf("metaTitleOf = %q, want Hello World", got)
@@ -188,7 +188,7 @@ func TestWikilinkResolvesInDotDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	md := newMarkdownConverter(dir)
+	md := newMarkdownConverter(dir, false)
 	got, err := md.convert([]byte("see [[hidden]]"))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
@@ -203,4 +203,160 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// --- raw HTML / dangerous URL handling (secreports/report1.md findings 1+2) ---
+
+func TestRawHTMLSuppressedByDefault(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, false)
+
+	inputs := []string{
+		"<script>alert(1)</script>",
+		`<img src=x onerror="alert(2)">`,
+		"<div onclick=\"alert(3)\">hi</div>",
+	}
+	for _, in := range inputs {
+		got, err := md.convert([]byte(in))
+		if err != nil {
+			t.Fatalf("convert(%q): %v", in, err)
+		}
+		if !contains(got, "<!-- raw HTML omitted -->") {
+			t.Errorf("convert(%q) = %q, want raw HTML omitted marker", in, got)
+		}
+		for _, needle := range []string{"<script>", "onerror", "onclick", "<img"} {
+			if contains(got, needle) {
+				t.Errorf("convert(%q) = %q, must not contain %q", in, got, needle)
+			}
+		}
+	}
+}
+
+func TestDangerousURLsNeutralizedByDefault(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, false)
+
+	inputs := []string{
+		"[x](javascript:alert(document.domain))",
+		"[x](vbscript:msgbox)",
+		"[x](file:///etc/passwd)",
+		"[x](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
+		"![x](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
+	}
+	for _, in := range inputs {
+		got, err := md.convert([]byte(in))
+		if err != nil {
+			t.Fatalf("convert(%q): %v", in, err)
+		}
+		for _, needle := range []string{`href="javascript:`, `href="vbscript:`, `href="file:`, `href="data:`, `src="data:text`} {
+			if contains(got, needle) {
+				t.Errorf("convert(%q) = %q, must not contain %q", in, got, needle)
+			}
+		}
+	}
+}
+
+func TestSafeDataURLsStillRender(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, false)
+
+	// goldmark's IsDangerousURL deliberately allows the image data-URL subset;
+	// this test documents that boundary so a future dep bump that changes it
+	// gets noticed instead of silently breaking inline images.
+	got, err := md.convert([]byte("![dot](data:image/png;base64,iVBORw0KGgo=)"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got, `src="data:image/png;base64,`) {
+		t.Errorf("safe image data URL should render, got: %q", got)
+	}
+}
+
+func TestSafeURLsUnaffected(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, false)
+
+	inputs := map[string]string{
+		"[x](https://example.com)": `href="https://example.com"`,
+		"[x](http://example.com)":  `href="http://example.com"`,
+		"[x](mailto:a@b.example)":  `href="mailto:a@b.example"`,
+		"[x](/relative/path.md)":   `href="/relative/path.md"`,
+		"[x](#fragment)":           `href="#fragment"`,
+		"![x](/img.png)":           `src="/img.png"`,
+	}
+	for in, want := range inputs {
+		got, err := md.convert([]byte(in))
+		if err != nil {
+			t.Fatalf("convert(%q): %v", in, err)
+		}
+		if !contains(got, want) {
+			t.Errorf("convert(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAutolinkDangerousSchemeFiltered(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, false)
+
+	// Autolinks go through a separate gate (html.go renderAutoLink), so cover
+	// them explicitly.
+	got, err := md.convert([]byte("<javascript:alert(1)>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(got, `href="javascript:`) {
+		t.Errorf("autolink javascript: URL must be filtered, got: %q", got)
+	}
+}
+
+func TestRawHTMLOptIn(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, true)
+
+	got, err := md.convert([]byte("<b>bold</b>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got, "<b>bold</b>") {
+		t.Errorf("--raw-html opt-in should pass trusted HTML through, got: %q", got)
+	}
+}
+
+func TestInlineHTMLTextPreserved(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, false)
+
+	// Suppressed tags must not eat the text between them.
+	got, err := md.convert([]byte("<b>bold</b>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got, "bold") {
+		t.Errorf("text inside suppressed inline HTML must survive, got: %q", got)
+	}
+	if contains(got, "<b>") {
+		t.Errorf("got: %q", got)
+	}
+}
+
+func TestGFMFeaturesSurviveWithoutUnsafe(t *testing.T) {
+	dir := t.TempDir()
+	md := newMarkdownConverter(dir, false)
+
+	got, err := md.convert([]byte("> [!NOTE]\n> hi\n\n```mermaid\ngraph TD; A-->B;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- [ ] task\n\n~~gone~~\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"markdown-alert-note",
+		`class="mermaid"`,
+		"<table>",
+		`type="checkbox"`,
+		"<del>gone</del>",
+	} {
+		if !contains(got, want) {
+			t.Errorf("GFM feature %q missing without WithUnsafe, got: %q", want, got)
+		}
+	}
 }

@@ -6,6 +6,187 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-20
+
+### Added
+- **Sidebar quick filter** (#18). A search box above the file tree filters the
+  whole vault, not just the folders that happen to be open: type part of a
+  name and every match appears with the folders it lives under, matched
+  characters highlighted. A query containing `/` matches the full path instead
+  of the name, `Esc` clears, and results are capped at 200 with a count.
+- `golden/`: golden-file coverage for the markdown pipeline. Every document in
+  `testdata/` plus 12 synthetic cases (all wikilink forms, all alert kinds,
+  mermaid fences, front matter including malformed input, GFM, raw HTML, and
+  the dangerous URL schemes) is rendered in both `--raw-html` modes and
+  compared. Regenerate with `go test -run TestRenderGolden -update-golden`.
+- Unit tests for each vendored extension, at 90–95% statement coverage.
+- `tablesort_test.go`: the embedded `static/js/tablesort.js` is now executed
+  in a JS engine from `go test`, covering ascending and descending order for
+  every value shape the sorter supports and the `../` row detection.
+- The vendored mermaid bundle is pinned by sha256 in `handler_test.go`, and
+  its `securityLevel:"strict"` bootstrap is asserted. Nothing else tracks that
+  file — dependabot reads `go.mod` and the workflows, syft's SBOM sees only Go
+  modules — so bumping mermaid now fails a test until the recorded version and
+  digest are updated with it.
+
+### Changed
+- **Sidebar renders lazily** (#18). A folder's contents are built the first
+  time it is opened rather than for the entire tree on page load; only the
+  branch containing the current page is expanded up front. On a 4,800-file
+  vault this is 174 DOM elements per page load instead of 10,923. The whole
+  tree is still fetched and held in memory, which is what lets the filter
+  search files it has never drawn.
+- `/__mdview/tree.json` now carries an `ETag` and honours `If-None-Match`, so
+  the sidebar's refetch on every page navigation returns a bodiless `304`
+  instead of re-sending the tree — 311 KB on that same vault.
+- **Migrated to goldmark v2**, and the four markdown extensions are now
+  vendored under `internal/` instead of imported. goldmark v2 removed the
+  `goldmark.Extender` interface the upstream extensions implement, and none of
+  them has a v2 release, so each was ported and trimmed to what markbrowse
+  actually uses. Rendering is unchanged: all 44 golden cases produce
+  byte-identical HTML. The module now depends on two libraries at runtime
+  (`goldmark/v2` and `yaml.v2`) instead of six.
+  - `internal/wikilink` — from `go.abhg.dev/goldmark/wikilink` (BSD-3-Clause)
+  - `internal/mermaid` — from `go.abhg.dev/goldmark/mermaid` (BSD-3-Clause),
+    ~85% smaller: the mermaid-CLI and headless-Chrome rendering backends are
+    gone, along with the chromedp dependency tree
+  - `internal/alerts` — from `goldmark-gh-alerts` (MIT)
+  - `internal/frontmatter` — from `goldmark-meta` (MIT), parser only
+- **Default bind changed to `127.0.0.1`** (was `0.0.0.0`). The server is
+  unauthenticated, so it is no longer network-reachable by default; pass
+  `--listen 0.0.0.0` (or a specific address) to expose it. Container port
+  mappings (`-p 8080:8080`) now need `--listen 0.0.0.0`.
+  (secreports/report1.md finding 7)
+- CI/release workflows pass `github.ref_name` through an env var and scrub
+  it before use, instead of interpolating `${{ }}}` into `run:` steps
+  (secreports/report1.md findings 5+6).
+- Raw HTML embedded in markdown is now omitted by default (matching GitHub)
+  and `javascript:`/`vbscript:`/`file:`/`data:` link targets are filtered;
+  `--raw-html` restores the previous pass-through behavior for trusted
+  content.
+- **Mermaid upgraded 11.15.0 → 12.0.0**, adopting its new defaults: the ELK
+  layout engine (was dagre), the `neo` look, and the `redux-color` theme.
+  **Existing diagrams will re-lay-out and restyle.** Mermaid 12 needs an
+  ES2024 browser (Safari 17.4+, current Chrome/Firefox/Edge), and the bundle
+  grows from 3.2 MB to 5.3 MB — it is still only loaded on pages that
+  actually contain a diagram. `securityLevel:"strict"` is unchanged and now
+  covered by a test.
+- Minimum Go version is now 1.26 (was 1.24), and CI/release build with it.
+  Go 1.25 is required by `github.com/dop251/goja`, the JS engine the new
+  table-sorting tests run `static/js/tablesort.js` in; 1.26 by
+  `golang.org/x/text`.
+- Dependencies at latest: `github.com/yuin/goldmark` 1.8.5 → 1.8.6 (#17, two
+  `URLEscape` fixes plus an extension fix), `gopkg.in/yaml.v2` 2.3.0 → 2.4.0
+  (#16), plus `regexp2` 2.5.2 → 2.8.0, `sourcemap` 2.1.3 → 2.1.4, `pprof` and
+  `golang.org/x/text` 0.3.8 → 0.42.0.
+- CI/release pinned tooling at latest: `actions/checkout` v6 → v7.0.1,
+  `actions/setup-go` v6.4.0 → v7.0.0, `actions/upload-artifact` v4 → v7.0.1
+  in the SBOM workflow, `softprops/action-gh-release` v3.0.0 → v3.0.3, gosec
+  v2.22.3 → v2.29.0, syft v1.18.1 → v1.52.0, grype v0.87.0 → v0.119.0.
+- Dependabot now watches `github-actions` as well as `gomod`; without it the
+  action pins never moved and had drifted a full major behind.
+
+### Fixed
+- **Alerts lost their icon and title in any CRLF document.** The title parser
+  stripped `\n` from the end of the marker line but not `\r`, so a CRLF file
+  left `"\r"` as the title — non-empty, so the alert took the custom-title
+  branch and rendered with neither icon nor kind name. Every callout in a CRLF
+  vault silently lost its heading, on every platform; Windows CI is simply
+  where it showed up. The line ending is now trimmed as whitespace.
+- A tab immediately after an alert marker (`> [!NOTE]\t`) made the title
+  swallow the following line. `util.IndentWidth` returns a column width and a
+  byte offset, and the code advanced by the width — identical for spaces, but
+  a tab is one byte and up to four columns.
+- `.gitattributes` normalises line endings to LF. Three things here compare
+  bytes rather than lines and all failed on a Windows checkout: the golden
+  files, the anchored regexes that unwrap the JS for the goja tests, and the
+  sha256-pinned mermaid bundle.
+- The served directory is no longer held open. `os.Root` was cached on the
+  handler, which kept a descriptor on the directory for the handler's
+  lifetime — harmless on POSIX, but on Windows it blocks deleting the
+  directory. It is opened per request now; one extra `openat` is not
+  measurable beside the stat and render already being done.
+- Windows CI builds again. The 0.3.0 CI hardening replaced a single-line
+  `go build` with a multi-line shell script, but the `build` job runs a
+  three-OS matrix and `windows-latest` defaults to PowerShell, where
+  `REF_NAME=$(... | tr ...)` is not valid syntax. The job now pins
+  `shell: bash`, which GitHub-hosted Windows runners provide.
+- The sidebar now reveals and highlights the page you opened directly, not
+  just ones you clicked through to (#18). When a directory serves its index,
+  the page reports the file actually rendered (`/guides/README.md`) rather
+  than the directory that was requested (`/guides`) — the sidebar only has a
+  node for the file, so the old value matched nothing and the tree stayed
+  collapsed with nothing marked. A directory *listing* reports itself with a
+  trailing slash, which opens that folder without marking any file.
+- Table sorting now compares the whole value instead of the first digits
+  `parseFloat` happened to find: cells are split into text and number
+  segments and compared segment by segment, so `8x.0` sorts before `9.0`,
+  `95%` before `100%`, `A1` before `A10` before `B2`, and `Chapter 3` before
+  `Chapter 10`. Values with `%`/unit/currency attachments (`1.2m`, `$1,234`)
+  and version-like values (`8.9.0` before `8.10.0`) no longer fall into the
+  plain-text branch (#19).
+- Directory listings: the `../` row of a first-level directory now links to
+  `/` instead of the `//` protocol-relative URL, and the sorter matches the
+  row by its `../` label, so the parent row really stays pinned above the
+  sorted rows (#19).
+
+### Security
+- **Path containment is now enforced by the kernel, not by a check.** All
+  filesystem access below the served directory goes through `os.Root`
+  (`openat2`/`RESOLVE_BENEATH` on Linux), which refuses any name resolving
+  outside the root — including through symlinks — instead of the previous
+  resolve-then-compare-then-open sequence. That also closes the
+  stat-then-open race structurally rather than by argument, and clears the
+  `go/path-injection` alerts GitHub code scanning raised on PR #21. Absolute
+  symlinks pointing back into the served tree are still followed: `os.Root`
+  refuses them outright, so their targets are rewritten to root-relative names
+  and resubmitted, which keeps containment enforced on the rewritten name.
+- The CSP nonce is now URL-safe base64. Standard base64 contains `+`, which
+  `html/template` escapes to `&#43;` inside the `nonce=""` attribute, leaving
+  the attribute and the header textually different. Browsers entity-decode
+  before comparing so it would most likely still have matched, but the policy
+  only does its job if the two are identical.
+- **Non-markdown files can no longer execute in the viewer's origin.** A
+  `.html` or `.svg` file sitting beside the markdown was served as
+  `text/html` / `image/svg+xml`, and a file with no extension whose contents
+  began with markup was content-sniffed to `text/html`. Following an ordinary
+  markdown link to one ran its script with same-origin access to everything
+  the server exposes — no auth, so the whole served tree could be enumerated
+  via `/__mdview/tree.json`, read, and exfiltrated. That defeated the point of
+  omitting raw HTML from markdown: the payload simply moved into a sibling
+  file. Such responses now carry `Content-Security-Policy: sandbox`, which
+  puts them in an opaque origin. Images, PDFs and downloads are unaffected.
+- **`.git` blocking now holds on macOS and Windows.** The match was exact, so
+  `/.GIT/config` was not recognised — and on a case-insensitive filesystem
+  (APFS, NTFS) the OS resolves it to the real `.git/config`, which commonly
+  contains credentials in the remote URL. Matching is now case-folded, and
+  also covers Windows trailing-dot (`.git.`) and 8.3 (`GIT~1`) aliases.
+- **Security headers on every response**: `X-Content-Type-Options: nosniff`
+  (which is what stops the content-sniffing case above) and
+  `Referrer-Policy: no-referrer`. Rendered pages additionally carry a
+  `Content-Security-Policy` with a per-request nonce for the inline mermaid
+  bootstrap, `default-src 'none'`, and `connect-src 'self'` so an injected
+  script cannot exfiltrate over `fetch`.
+- Markdown larger than 32 MiB is refused with `413` rather than read and
+  rendered. Rendering is linear in file size and happens per request, so an
+  enormous document was a cheap way to exhaust the process once `--listen`
+  put the server beyond loopback.
+- The front matter YAML parse error, which is emitted as an HTML comment when
+  a metadata block fails to parse, can no longer close that comment early:
+  `-->` is escaped out of the message. Error text is partly derived from
+  document content, and the upstream extension interpolated it verbatim.
+- The alert kind is HTML-escaped before it reaches the `class` attribute. The
+  marker syntax already restricts it to word characters, so this closes the
+  shape of the hole rather than a reachable one.
+- Fix stored XSS: `<script>`/event-handler HTML in served markdown no longer
+  executes in the viewer's browser (secreports/report1.md findings 1+2).
+- Symlinks inside the served tree can no longer point the server at files
+  outside it: every request path is resolved with `filepath.EvalSymlinks` and
+  must remain under the resolved root (secreports/report1.md finding 3).
+- `.git`, `.hg`, `.svn` and `.bzr` directories are never served, listed in the
+  sidebar, or wikilink-indexed (secreports/report1.md finding 4). Other
+  dot-directories (`.obsidian` vaults) remain browsable.
+
 ## [0.3.0] - 2026-08-30
 
 ### Added
@@ -98,7 +279,8 @@ Initial public release.
 - Breadcrumb navigation on all pages.
 - Single-binary distribution, zero configuration.
 
-[Unreleased]: https://github.com/anantshri/markbrowse/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/anantshri/markbrowse/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/anantshri/markbrowse/releases/tag/v0.4.0
 [0.3.0]: https://github.com/anantshri/markbrowse/releases/tag/v0.3.0
 [0.2.0]: https://github.com/anantshri/markbrowse/releases/tag/v0.2.0
 [0.1.2]: https://github.com/anantshri/markbrowse/releases/tag/v0.1.2

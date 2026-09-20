@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"time"
 )
 
@@ -26,9 +27,16 @@ func getVersion() string {
 	return "dev"
 }
 
+// defaultListenHost is loopback: the server is unauthenticated, so it must
+// not be reachable from the network unless the operator explicitly passes
+// --listen 0.0.0.0 (or another address).
+const defaultListenHost = "127.0.0.1"
+
 func main() {
 	port := flag.Int("port", 8080, "port to listen on")
+	listenHost := flag.String("listen", defaultListenHost, "IP or hostname to bind (e.g. 0.0.0.0 to expose on the network)")
 	cssPath := flag.String("css", "", "path to custom CSS file (replaces built-in stylesheet)")
+	rawHTML := flag.Bool("raw-html", false, "render raw HTML in markdown unescaped and allow javascript:/data: URLs (only for content you trust)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -70,16 +78,17 @@ func main() {
 
 	h := &fileHandler{
 		root:      rootDir,
-		md:        newMarkdownConverter(rootDir),
+		md:        newMarkdownConverter(rootDir, *rawHTML),
 		customCSS: customCSS,
 	}
 
-	listener, actualPort, err := listenWithFallback(*port)
+	listener, actualPort, err := listenWithFallback(*listenHost, *port)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	addr := fmt.Sprintf(":%d", actualPort)
+	// JoinHostPort brackets IPv6 literals correctly; Sprintf("%s:%d") does not.
+	addr := net.JoinHostPort(*listenHost, strconv.Itoa(actualPort))
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      h,
@@ -87,12 +96,22 @@ func main() {
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
-	log.Printf("markbrowse serving %s on http://localhost%s", rootDir, addr)
+	log.Printf("markbrowse serving %s on http://%s", rootDir, net.JoinHostPort(displayHost(*listenHost), strconv.Itoa(actualPort)))
 	log.Fatal(srv.Serve(listener))
 }
 
-func listenWithFallback(port int) (net.Listener, int, error) {
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+// displayHost turns wildcard bind addresses into something a browser can
+// actually open ("0.0.0.0" and "::" are not browsable URLs).
+func displayHost(host string) string {
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "localhost"
+	}
+	return host
+}
+
+func listenWithFallback(host string, port int) (net.Listener, int, error) {
+	// nosemgrep: go.lang.security.audit.net.bind_all.avoid-bind-to-all-interfaces -- binds the operator-requested --listen address; loopback by default
+	l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err == nil {
 		return l, port, nil
 	}
@@ -103,7 +122,8 @@ func listenWithFallback(port int) (net.Listener, int, error) {
 		start = 10000
 	}
 	for p := start; p <= 65535; p++ {
-		l, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		// nosemgrep: go.lang.security.audit.net.bind_all.avoid-bind-to-all-interfaces -- fallback scan binds the same operator-requested host; loopback by default
+		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(p)))
 		if err == nil {
 			log.Printf("falling back to port %d", p)
 			return l, p, nil
