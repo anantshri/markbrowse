@@ -182,3 +182,86 @@ SIZE CAP   32.4 MB .md -> 413,  normal .md -> 200
 - `--raw-html` and `--css` remain documented footguns rather than being
   removed; both are explicit operator opt-ins and now named as such in the
   README.
+
+---
+
+## Follow-up: GitHub code scanning on PR #21 (`go/path-injection`)
+
+CodeQL reported two alerts, both "This path depends on a user-provided value":
+
+- `handler.go` — `os.Open(resolved)` in `ServeHTTP`
+- `handler.go` — `os.Stat(resolved)` in `serveDirectory`'s index loop
+
+Both carried a `#nosec G304` justification, which does nothing here: `#nosec`
+is gosec-only. A grep found six such sinks; CodeQL had named two
+representatively, so all six were converted.
+
+### Why os.Root rather than a dismissal
+
+The old design was resolve (`EvalSymlinks`), compare (`underRoot`), open the
+resolved path. It is correct — traversal and symlink escape both 404, verified
+in the review above — but correct *by argument*, and there is a window between
+the check and the open. `os.Root` makes containment a kernel guarantee
+(`openat2`/`RESOLVE_BENEATH`): its methods refuse any name resolving outside
+the root, so the path reaching a filesystem call no longer has to be proven
+safe by reading three statements in order. Clearing the alert is a side effect
+of removing the sink.
+
+`resolveContained` stays, demoted to VCS policy only: a symlink that stays
+inside the root but points at `.git/config` is contained, and `os.Root` has no
+opinion about that.
+
+### The behaviour os.Root would have removed
+
+It refuses *every* absolute symlink, including one pointing back inside:
+
+```
+abs.md   ERR: statat abs.md: path escapes from parent   readlink=/tmp/.../real.md
+rel.md   OK                                             readlink=real.md
+```
+
+`TestServeHTTPAllowsSymlinkInsideRoot` has asserted the opposite since symlink
+containment was added, and `ln -s /abs/path/notes.md` into a vault is ordinary.
+So `statInRoot` rewrites an absolute target to a root-relative name and
+resubmits it through `os.Root` — the lexical check decides how to rewrite, not
+whether to allow, and the rewritten name gets the same kernel check. A hop
+limit bounds loops.
+
+### A real bug the flaky test caught
+
+Post-refactor, `TestMermaidScriptCarriesTheNonce` failed intermittently under
+`-shuffle=on -count=3`:
+
+```
+inline script nonce "1EqaCJRNI&#43;&#43;/1KHDuqmeHQ==" does not match CSP nonce "1EqaCJRNI++/1KHDuqmeHQ=="
+```
+
+The nonce was standard base64; `html/template` escapes `+` to `&#43;` in an
+attribute, so it failed only when the random bytes encoded a `+`. Browsers
+entity-decode before comparing the nonce so it would most likely have worked,
+but a policy that functions only because of entity decoding is thin. Switched
+to `base64.RawURLEncoding` (`A-Za-z0-9-_`), and `TestNonceIsUnpredictable` now
+asserts the alphabet.
+
+### Verification
+
+```
+containment    /../etc/passwd  ..%2f..  /escape.md  /etcdir/  /etcdir/passwd  -> all 404
+symlinks       /abs.md 200 (Deep)   /rel.md 200 (Deep)
+VCS policy     /.git/config  /.GIT/config  /sneaky.md (-> .git/config)  -> all 404
+headers        evil.html: sandbox + nosniff;  pic.png: no CSP
+nonce          9yhHLrPpuWB98XwlJtMaVA  -- URL-safe
+```
+
+New: `TestAbsoluteSymlinkInsideRootStillServed`, `TestSymlinkRewritingIsBounded`.
+`go test -count=2 -shuffle=on ./...` repeatedly stable. Coverage 78.3% ->
+**78.6%**.
+
+### Open
+
+Whether the alerts actually clear depends on whether that CodeQL version
+models `os.Root` methods as sinks. If they persist, dismissal is now on much
+firmer ground. Note `filepath.EvalSymlinks` was never flagged despite
+predating this work, which is what suggested their query pack models
+`os.Open`/`os.Stat` but not symlink resolution — and is why `resolveContained`
+could stay.

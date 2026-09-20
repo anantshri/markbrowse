@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // securityVault builds a tree containing the file shapes that decide whether
@@ -251,10 +252,95 @@ func TestNonceIsUnpredictable(t *testing.T) {
 		if len(n) < 16 {
 			t.Fatalf("nonce %q is too short to be useful", n)
 		}
+		// The nonce is written into a nonce="" attribute and must survive
+		// html/template byte for byte, or the attribute and the CSP header
+		// stop being identical. Standard base64 fails this: "+" becomes
+		// "&#43;".
+		for _, c := range n {
+			isSafe := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+				(c >= '0' && c <= '9') || c == '-' || c == '_'
+			if !isSafe {
+				t.Fatalf("nonce %q contains %q, which html/template may escape", n, c)
+			}
+		}
 		if seen[n] {
 			t.Fatalf("newNonce repeated %q after %d calls", n, i)
 		}
 		seen[n] = true
+	}
+}
+
+// TestAbsoluteSymlinkInsideRootStillServed covers the behaviour os.Root would
+// otherwise have removed. os.Root refuses every absolute symlink, including
+// one pointing back into the served tree; markbrowse has always served those,
+// so statInRoot rewrites the target to a root-relative name and resubmits it —
+// which means os.Root still applies containment to the rewritten name.
+func TestAbsoluteSymlinkInsideRootStillServed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "real.md"), []byte("# Real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	links := map[string]string{
+		"abs.md":   filepath.Join(dir, "sub", "real.md"), // absolute, inside
+		"rel.md":   filepath.Join("sub", "real.md"),      // relative, inside
+		"chain.md": filepath.Join(dir, "abs.md"),         // absolute -> absolute
+		"out.md":   "/etc/passwd",                        // absolute, escaping
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	for _, tc := range []struct {
+		url  string
+		want int
+	}{
+		{"/abs.md", http.StatusOK},
+		{"/rel.md", http.StatusOK},
+		{"/chain.md", http.StatusOK},
+		{"/out.md", http.StatusNotFound},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			rec := get(t, h, tc.url)
+			if rec.Code != tc.want {
+				t.Errorf("GET %s = %d, want %d", tc.url, rec.Code, tc.want)
+			}
+			if tc.want == http.StatusOK && !strings.Contains(rec.Body.String(), "Real") {
+				t.Errorf("GET %s did not render the target", tc.url)
+			}
+		})
+	}
+}
+
+// TestSymlinkRewritingIsBounded: a symlink loop must terminate rather than
+// spin. The hop limit is what guarantees that.
+func TestSymlinkRewritingIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	// a -> b -> a, both absolute so each hop goes through the rewrite path.
+	if err := os.Symlink(filepath.Join(dir, "b.md"), filepath.Join(dir, "a.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "a.md"), filepath.Join(dir, "b.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+	done := make(chan int, 1)
+	go func() { done <- get(t, h, "/a.md").Code }()
+	select {
+	case code := <-done:
+		if code != http.StatusNotFound {
+			t.Errorf("symlink loop = %d, want 404", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("symlink loop did not terminate")
 	}
 }
 

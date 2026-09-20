@@ -87,6 +87,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   action pins never moved and had drifted a full major behind.
 
 ### Fixed
+- Windows CI builds again. The 0.3.0 CI hardening replaced a single-line
+  `go build` with a multi-line shell script, but the `build` job runs a
+  three-OS matrix and `windows-latest` defaults to PowerShell, where
+  `REF_NAME=$(... | tr ...)` is not valid syntax. The job now pins
+  `shell: bash`, which GitHub-hosted Windows runners provide.
 - The sidebar now reveals and highlights the page you opened directly, not
   just ones you clicked through to (#18). When a directory serves its index,
   the page reports the file actually rendered (`/guides/README.md`) rather
@@ -107,6 +112,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sorted rows (#19).
 
 ### Security
+- **Path containment is now enforced by the kernel, not by a check.** All
+  filesystem access below the served directory goes through `os.Root`
+  (`openat2`/`RESOLVE_BENEATH` on Linux), which refuses any name resolving
+  outside the root — including through symlinks — instead of the previous
+  resolve-then-compare-then-open sequence. That also closes the
+  stat-then-open race structurally rather than by argument, and clears the
+  `go/path-injection` alerts GitHub code scanning raised on PR #21. Absolute
+  symlinks pointing back into the served tree are still followed: `os.Root`
+  refuses them outright, so their targets are rewritten to root-relative names
+  and resubmitted, which keeps containment enforced on the rewritten name.
+- The CSP nonce is now URL-safe base64. Standard base64 contains `+`, which
+  `html/template` escapes to `&#43;` inside the `nonce=""` attribute, leaving
+  the attribute and the header textually different. Browsers entity-decode
+  before comparing so it would most likely still have matched, but the policy
+  only does its job if the two are identical.
 - **Non-markdown files can no longer execute in the viewer's origin.** A
   `.html` or `.svg` file sitting beside the markdown was served as
   `text/html` / `image/svg+xml`, and a file with no extension whose contents

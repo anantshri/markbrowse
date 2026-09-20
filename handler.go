@@ -34,6 +34,103 @@ type fileHandler struct {
 
 	resolveOnce  sync.Once
 	resolvedRoot string
+
+	rootOnce  sync.Once
+	fsRoot    *os.Root
+	fsRootErr error
+}
+
+// openRoot returns an os.Root confined to the served directory, opened once.
+//
+// os.Root is the containment guarantee: its methods refuse any name that
+// resolves outside the root, including through symlinks, and the refusal is
+// enforced by the kernel (openat2/RESOLVE_BENEATH on Linux) rather than by a
+// check this code performs and then hopes still holds. That closes the
+// stat-then-open race structurally instead of by argument, and it means the
+// path handed to a filesystem call is no longer something that has to be
+// proven safe by reading the surrounding code.
+//
+// It is opened lazily so a zero-value fileHandler is still usable.
+func (h *fileHandler) openRoot() (*os.Root, error) {
+	h.rootOnce.Do(func() {
+		h.fsRoot, h.fsRootErr = os.OpenRoot(h.root)
+	})
+	return h.fsRoot, h.fsRootErr
+}
+
+// maxSymlinkHops bounds the absolute-symlink rewriting in statInRoot.
+const maxSymlinkHops = 8
+
+// statInRoot stats a name inside the root, additionally following absolute
+// symlinks whose target is itself inside the root. It returns the info and the
+// name that access should actually use, which differs from the input when a
+// link was rewritten.
+//
+// os.Root refuses every absolute symlink, including one pointing back into the
+// served tree, because an absolute target is re-resolved against the whole
+// filesystem namespace rather than against the root. markbrowse has always
+// served those — linking shared notes into a vault with
+// "ln -s /abs/path/notes.md" is an ordinary thing to do, and
+// TestServeHTTPAllowsSymlinkInsideRoot has asserted it since symlink
+// containment was added — so the target is translated into a root-relative
+// name and resubmitted to os.Root.
+//
+// The lexical comparison here only decides how to rewrite the name. It never
+// authorises the access: the rewritten name goes back through os.Root, which
+// applies the same kernel-enforced containment to it, so a target that is not
+// genuinely inside the root still fails.
+func (h *fileHandler) statInRoot(root *os.Root, name string) (os.FileInfo, string, error) {
+	for hop := 0; ; hop++ {
+		info, err := root.Stat(name)
+		if err == nil {
+			return info, name, nil
+		}
+		if hop >= maxSymlinkHops {
+			return nil, "", err
+		}
+
+		// Only the absolute-symlink case is recoverable. Anything else — a
+		// missing file, a link that really does escape — keeps its error.
+		target, linkErr := root.Readlink(name)
+		if linkErr != nil || !filepath.IsAbs(target) {
+			return nil, "", err
+		}
+
+		next, ok := h.relocate(target)
+		if !ok {
+			return nil, "", err
+		}
+		name = next
+	}
+}
+
+// relocate expresses an absolute path as a name relative to the served root,
+// if it is inside it. Both the raw and the symlink-resolved root are tried,
+// because the root itself may be reached through a symlink (macOS /var).
+func (h *fileHandler) relocate(target string) (string, bool) {
+	target = filepath.Clean(target)
+	for _, base := range []string{h.root, h.resolvedRootDir()} {
+		if !underRoot(base, target) {
+			continue
+		}
+		rel, err := filepath.Rel(base, target)
+		if err != nil {
+			continue
+		}
+		return rel, true
+	}
+	return "", false
+}
+
+// rootName converts a cleaned URL path into the root-relative name that
+// os.Root methods take: "/guides/intro.md" becomes "guides/intro.md", and the
+// root itself becomes ".".
+func rootName(relPath string) string {
+	name := strings.TrimPrefix(relPath, "/")
+	if name == "" {
+		return "."
+	}
+	return filepath.FromSlash(name)
 }
 
 // vcsDirNames are repository-metadata directories that are never served,
@@ -99,9 +196,13 @@ func (h *fileHandler) resolvedRootDir() string {
 }
 
 // resolveContained resolves every symlink in fsPath and reports whether the
-// fully-resolved target still sits under the resolved root and outside VCS
-// directories. This is the actual containment check: the lexical checks in
-// ServeHTTP can be bypassed by any symlink inside the served tree.
+// fully-resolved target is servable.
+//
+// Containment itself is no longer this function's job — os.Root enforces that
+// (see openRoot). What is still needed here is the VCS policy, which os.Root
+// has no opinion about: a symlink that stays inside the root but points at
+// ".git/config" is contained and must still be refused. The underRoot check is
+// kept as a cheap second opinion, not as the guarantee.
 func (h *fileHandler) resolveContained(fsPath string) (string, bool) {
 	resolved, err := filepath.EvalSymlinks(fsPath)
 	if err != nil {
@@ -176,8 +277,13 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #nosec G304 G703 -- fsPath is joined from h.root and the path.Clean'd request path; existence is checked here and full symlink containment via resolveContained below
-	info, err := os.Stat(fsPath)
+	root, err := h.openRoot()
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	info, name, err := h.statInRoot(root, rootName(relPath))
 	if err != nil {
 		if os.IsPermission(err) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -187,11 +293,10 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The real containment guard: resolve symlinks and require the target to
-	// stay under the resolved root (and out of VCS dirs). os.Stat/Open/ReadFile
-	// all follow symlinks, so the lexical checks above are not sufficient.
-	resolved, ok := h.resolveContained(fsPath)
-	if !ok {
+	// os.Root has already refused anything outside the tree. This is the VCS
+	// policy on the symlink target: "notes.md -> .git/config" is contained, so
+	// only resolving it catches the leak.
+	if _, ok := h.resolveContained(fsPath); !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -203,17 +308,16 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, relPath+"/", http.StatusMovedPermanently)
 			return
 		}
-		h.serveDirectory(w, r, resolved, relPath)
+		h.serveDirectory(w, r, name, relPath)
 		return
 	}
 
 	if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-		h.serveMarkdown(w, r, resolved, relPath, relPath)
+		h.serveMarkdown(w, r, name, relPath, relPath)
 		return
 	}
 
-	// #nosec G304 G703 -- resolved path re-validated by resolveContained (EvalSymlinks + underRoot) immediately above
-	f, err := os.Open(resolved)
+	f, err := root.Open(name)
 	if err != nil {
 		if os.IsPermission(err) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -301,39 +405,59 @@ func pageCSP(nonce string) string {
 		"frame-ancestors 'none'"
 }
 
-// newNonce returns a fresh CSP nonce. A failure to read the system CSPRNG is
-// not recoverable into "carry on without a nonce": that would silently drop
-// the inline script and break the page, so it is reported to the caller.
+// newNonce returns a fresh CSP nonce.
+//
+// The encoding is URL-safe and unpadded on purpose. Standard base64 contains
+// "+", which html/template escapes to "&#43;" when the nonce is written into
+// the nonce="" attribute, leaving the attribute and the CSP header textually
+// different. A browser entity-decodes the attribute before comparing, so it
+// would most likely still match — but the policy is only doing its job if the
+// two are identical, and "relies on entity decoding" is a thin thing to rest
+// script execution on. RawURLEncoding's alphabet (A-Za-z0-9-_) has nothing
+// html/template escapes, and the CSP grammar accepts it.
+//
+// A failure to read the system CSPRNG is not recoverable into "carry on
+// without a nonce": that would silently drop the inline script and break the
+// page, so it is reported to the caller.
 func newNonce() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	return base64.StdEncoding.EncodeToString(b[:]), nil
+	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
-func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
+// serveDirectory renders a directory. dirName is the directory's name relative
+// to the served root, as os.Root methods take it.
+func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, dirName, relPath string) {
+	root, err := h.openRoot()
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	for _, name := range []string{"README.md", "readme.md", "INDEX.md", "index.md"} {
-		indexPath := filepath.Join(fsPath, name)
-		// The candidate itself may be a symlink escaping the tree (README.md
-		// -> /etc/passwd), so run it through the same containment check as
-		// request paths. A rejected candidate falls through to the listing —
-		// a hostile symlink must not break browsing the directory.
-		resolved, ok := h.resolveContained(indexPath)
-		if !ok {
+		indexName := filepath.Join(dirName, name)
+		indexPath := filepath.Join(h.root, indexName)
+		// The candidate may be a symlink into a VCS directory, which os.Root
+		// would happily follow because it stays inside the tree. A rejected
+		// candidate falls through to the listing — a hostile symlink must not
+		// break browsing the directory.
+		if _, ok := h.resolveContained(indexPath); !ok {
 			continue
 		}
-		// #nosec G304 G703 -- resolved passed resolveContained (EvalSymlinks + underRoot against the resolved root) immediately above
-		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+		// os.Root refuses a candidate that escapes the tree (README.md ->
+		// /etc/passwd), so the escape case needs no check of its own: Stat
+		// simply fails and the loop moves on.
+		if info, effective, err := h.statInRoot(root, indexName); err == nil && !info.IsDir() {
 			// path.Join keeps the root case right: "/" + "README.md" is
 			// "/README.md", not "//README.md".
-			h.serveMarkdown(w, r, resolved, relPath, path.Join(relPath, name))
+			h.serveMarkdown(w, r, effective, relPath, path.Join(relPath, name))
 			return
 		}
 	}
 
-	// #nosec G304 G703 -- fsPath validated against h.root in ServeHTTP
-	entries, err := os.ReadDir(fsPath)
+	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(dirName))
 	if err != nil {
 		if os.IsPermission(err) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -397,15 +521,22 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 	}
 }
 
-// serveMarkdown renders a markdown file. relPath is the request path, used for
-// breadcrumbs; currentPath is the URL of the file actually being rendered,
-// which the sidebar matches against to highlight and reveal it. The two differ
-// when a directory serves its index: the request is for /guides/ but the file
-// on screen is /guides/README.md, and the sidebar has a node only for the
-// latter.
-func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath, currentPath string) {
-	// #nosec G304 G703 -- fsPath passed through resolveContained (EvalSymlinks + underRoot) in ServeHTTP, or from the containment-checked index candidates in serveDirectory
-	info, err := os.Stat(fsPath)
+// serveMarkdown renders a markdown file.
+//
+// fileName is the file's name relative to the served root, as os.Root methods
+// take it. relPath is the request path, used for breadcrumbs; currentPath is
+// the URL of the file actually being rendered, which the sidebar matches
+// against to highlight and reveal it. The last two differ when a directory
+// serves its index: the request is for /guides/ but the file on screen is
+// /guides/README.md, and the sidebar has a node only for the latter.
+func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fileName, relPath, currentPath string) {
+	root, err := h.openRoot()
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	info, fileName, err := h.statInRoot(root, fileName)
 	if err != nil {
 		if os.IsPermission(err) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -434,8 +565,7 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 		return
 	}
 
-	// #nosec G304 G703 -- fsPath containment-checked via resolveContained before dispatch
-	source, err := os.ReadFile(fsPath)
+	source, err := root.ReadFile(fileName)
 	if err != nil {
 		if os.IsPermission(err) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -451,7 +581,7 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 		return
 	}
 
-	title := filepath.Base(fsPath)
+	title := filepath.Base(fileName)
 	// Front matter title wins, else the first <h1>, else the filename.
 	if t := h.md.metaTitleOf(source); t != "" {
 		title = t

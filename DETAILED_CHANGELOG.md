@@ -9,6 +9,176 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-09-20 — os.Root containment, from GitHub code scanning on PR #21
+
+**Summary:** CodeQL (`go/path-injection`, "This path depends on a
+user-provided value") flagged two filesystem calls in `handler.go`. Rather
+than dismiss them, all file access below the served directory moved onto
+`os.Root`, which makes containment a kernel guarantee instead of a check this
+code performs. Behaviour is unchanged, verified end to end.
+
+**The alerts** were on `os.Open(resolved)` in `ServeHTTP` and
+`os.Stat(resolved)` in `serveDirectory`'s index loop — both carrying a
+`#nosec G304` justification, which does nothing for CodeQL: `#nosec` is
+gosec-only. A grep found six such sinks in total; CodeQL had reported two
+representatively, so all six were converted rather than the named pair.
+
+**Why this is a fix and not a suppression.** The previous design was
+resolve (`filepath.EvalSymlinks`), compare (`underRoot`), then open the
+resolved absolute path. That is correct — traversal and symlink escape were
+both verified to 404 during the review — but it is correct *by argument*: the
+safety lives in the reader's head and in the ordering of three statements, and
+between the check and the open there is a window. `os.Root` inverts it: its
+methods refuse any name that resolves outside the root, enforced by the
+kernel, so the path reaching a filesystem call is no longer something that has
+to be proven safe by reading the surrounding code. Clearing the alert is a
+side effect of removing the taint sink, not the goal.
+
+**What moved:**
+
+| Was | Now |
+|---|---|
+| `os.Stat(fsPath)` in `ServeHTTP` | `statInRoot(root, name)` |
+| `os.Open(resolved)` | `root.Open(name)` |
+| `os.Stat(resolved)` (index candidate) | `statInRoot(root, indexName)` |
+| `os.ReadDir(fsPath)` | `fs.ReadDir(root.FS(), dirName)` |
+| `os.Stat(fsPath)` in `serveMarkdown` | `statInRoot(root, fileName)` |
+| `os.ReadFile(fsPath)` | `root.ReadFile(fileName)` |
+
+`serveMarkdown` and `serveDirectory` now take a root-relative name rather than
+an absolute path. Every `#nosec G304` annotation is gone, because the sinks
+they were justifying no longer exist. The root is opened lazily behind a
+`sync.Once` so a zero-value `fileHandler` — which most tests construct —
+keeps working untouched.
+
+**The one behaviour `os.Root` would have removed.** It refuses *every*
+absolute symlink, including one pointing back into the served tree:
+
+```
+abs.md   ERR: statat abs.md: path escapes from parent   readlink=/tmp/probe.../real.md
+rel.md   OK                                             readlink=real.md
+```
+
+`TestServeHTTPAllowsSymlinkInsideRoot` has asserted since symlink containment
+was added that such links are served, and linking shared notes into a vault
+with `ln -s /abs/path/notes.md` is an ordinary thing to do. Silently
+404-ing those would be a regression, so `statInRoot` rewrites an absolute
+target to a root-relative name and resubmits it to `os.Root`. The lexical
+comparison only decides *how* to rewrite; it never authorises access, because
+the rewritten name goes back through `os.Root` and gets the same kernel check.
+A hop limit bounds symlink loops.
+
+`resolveContained` survives, demoted from containment guarantee to VCS policy:
+a symlink that stays inside the root but points at `.git/config` is contained
+and must still be refused, and `os.Root` has no opinion about that.
+
+**A real bug found by a flaky test.** After the refactor,
+`TestMermaidScriptCarriesTheNonce` failed intermittently under
+`-shuffle=on -count=3`:
+
+```
+inline script nonce "1EqaCJRNI&#43;&#43;/1KHDuqmeHQ==" does not match CSP nonce "1EqaCJRNI++/1KHDuqmeHQ=="
+```
+
+The nonce was standard base64, and `html/template` escapes `+` to `&#43;` in
+an attribute context — so it only failed when the random 16 bytes happened to
+encode a `+`, roughly three runs in four. Browsers entity-decode the attribute
+before comparing the nonce, so this would most likely have worked in practice,
+but a policy that only functions because of entity decoding is a thin thing to
+rest script execution on. Switched to `base64.RawURLEncoding`, whose alphabet
+(`A-Za-z0-9-_`) has nothing `html/template` escapes and which the CSP grammar
+accepts. `TestNonceIsUnpredictable` now asserts the alphabet, so the class
+cannot come back.
+
+**Verification:**
+
+```
+containment    /../etc/passwd  ..%2f..  /escape.md  /etcdir/  /etcdir/passwd  -> all 404
+symlinks       /abs.md 200 (Deep)   /rel.md 200 (Deep)    <- absolute and relative both served
+VCS policy     /.git/config  /.GIT/config  /sneaky.md (-> .git/config)  -> all 404
+headers        evil.html: sandbox + nosniff;  pic.png: no CSP
+nonce          9yhHLrPpuWB98XwlJtMaVA  -- URL-safe, nothing to escape
+```
+
+- New tests: `TestAbsoluteSymlinkInsideRootStillServed` (absolute-inside,
+  relative-inside, absolute-to-absolute chain, escaping) and
+  `TestSymlinkRewritingIsBounded` (a symlink loop must terminate, not spin).
+- `go test -count=2 -shuffle=on ./...` run repeatedly, stable.
+- Coverage 78.3% -> **78.6%**. `gofmt`, `go vet`, `aidc-scan` clean.
+
+**Notes:**
+- Whether the CodeQL alerts actually clear depends on whether that version
+  models `os.Root` methods as sinks. If it still reports them, the remaining
+  answer is dismissal — but on much firmer ground than before, since
+  containment is no longer an argument about statement ordering.
+- `filepath.EvalSymlinks` was *not* among the alerts even though it predates
+  this change, which is what suggested their query pack models
+  `os.Open`/`os.Stat` as sinks but not symlink resolution. That is why
+  `resolveContained` could stay for the VCS policy.
+- The `filepath.WalkDir` calls in `treeJSONCached` and `buildFileIndex` walk
+  the configured root, not a request path, so they are not part of this class
+  and were left alone.
+
+---
+
+## 2026-09-20 — Fix Windows CI (PowerShell vs the hardened Build step)
+
+**Symptom:** the `build` job failed on `windows-latest` with
+
+```
+The term 'REF_NAME=$(printf '%s' "$REF_NAME" | tr -c 'A-Za-z0-9._-' '_')' is not
+recognized as a name of a cmdlet, function, script file, or operable program.
+```
+
+**Cause:** not a regression from this release's work. Commit `9aad01c`
+(2026-08-30, "harden CI ref handling") replaced
+
+```yaml
+run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o markbrowse .
+```
+
+with a multi-line script that scrubs `REF_NAME` through `tr` before using it.
+The original worked on every platform by accident: Actions substitutes `${{ }}`
+before the shell ever sees the line, so PowerShell only had to run `go build`.
+The replacement is POSIX shell — variable assignment, command substitution, a
+pipe into `tr` — and the `build` job runs a three-OS matrix in which
+`windows-latest` defaults to PowerShell. Windows CI has been broken since that
+commit.
+
+`release.yml` is unaffected: it cross-compiles for Windows from `ubuntu-latest`
+via `GOOS`/`GOARCH`, so its shell is always bash.
+
+**Fix:** pin the shell for the whole job rather than the one step, so a future
+multi-line step cannot reintroduce this.
+
+```yaml
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+```
+
+GitHub-hosted Windows runners ship Git Bash, so one script now works on all
+three platforms.
+
+**Verification:**
+- All three workflow files parse, and a scan for multi-line `run:` steps on
+  non-Linux runners without an explicit shell reports none remaining.
+- `go build ./...` and `go vet ./...` (which include the test files) pass for
+  `windows/amd64`, `darwin/arm64`, `darwin/amd64` and `linux/amd64`.
+- Checked that the new `security_test.go` does not depend on OS-provided MIME
+  data: every extension it asserts on (`.svg`, `.png`, `.html`, `.xml`, `.txt`,
+  `.zip`) is in Go's platform-independent `builtinTypesLower` table. `.md` is
+  not, but markdown is dispatched to `serveMarkdown` and never reaches
+  `contentTypeOf`.
+
+**Notes:** the Windows build still produces an extensionless `markbrowse`
+rather than `markbrowse.exe`, because `-o markbrowse` is taken literally. It is
+harmless — the CI build is a compile check and the artifact is never used —
+and `release.yml` already names the binary correctly per `GOOS`.
+
+---
+
 ## 2026-09-20 — Security review findings fixed (pre-0.4.0)
 
 **Summary:** a security review of the codebase before tagging 0.4.0 found three
