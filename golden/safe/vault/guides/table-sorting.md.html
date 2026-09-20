@@ -1,0 +1,261 @@
+<h1 id="table-sorting-demo">Table Sorting Demo</h1>
+<p>Click any column header to sort the table — first click ascending, second
+click descending. The active header shows a ▲/▼ indicator.</p>
+<p>Sorting is value-aware: each cell is split into alternating number and text
+segments, and the segments are compared in order. That covers plain numbers,
+comma-separated numbers, numbers with <code>%</code>/unit/symbol attachments, byte sizes
+with units, version-like values, timestamps, and numbered labels — while
+ordinary text still sorts alphabetically. Try each column in the tables below;
+the directory listing at the root of this vault sorts the same way.</p>
+<h2 id="plain-and-comma-separated-numbers">Plain and Comma-Separated Numbers</h2>
+<p>Rows start deliberately out of order so sorting is visible.</p>
+<table>
+<thead>
+<tr>
+<th>Rank</th>
+<th>Population</th>
+<th>Score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9</td>
+<td>1,250</td>
+<td>3.5</td>
+</tr>
+<tr>
+<td>1</td>
+<td>980,000</td>
+<td>97.2</td>
+</tr>
+<tr>
+<td>42</td>
+<td>47</td>
+<td>100</td>
+</tr>
+<tr>
+<td>3</td>
+<td>12,400</td>
+<td>0</td>
+</tr>
+<tr>
+<td>17</td>
+<td>305,000</td>
+<td>12.8</td>
+</tr>
+</tbody>
+</table>
+<p>Click <strong>Population</strong> — <code>980,000</code> should sort above <code>12,400</code>, proving the
+comma separators are understood, not compared as strings.</p>
+<h2 id="byte-sizes">Byte Sizes</h2>
+<p>Sizes with units sort by actual magnitude, so <code>900 B</code> &lt; <code>1.5 KB</code> &lt; <code>2 MB</code>.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Size</th>
+<th>Unit-free</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>notes.md</td>
+<td>386 B</td>
+<td>100</td>
+</tr>
+<tr>
+<td>mermaid.min.js</td>
+<td>3.2 MB</td>
+<td>3</td>
+</tr>
+<tr>
+<td>config.yaml</td>
+<td>1.5 KB</td>
+<td>20</td>
+</tr>
+<tr>
+<td>archive.zip</td>
+<td>42 B</td>
+<td>400</td>
+</tr>
+<tr>
+<td>video.mp4</td>
+<td>2.0 MB</td>
+<td>2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="timestamps">Timestamps</h2>
+<p>Directory-listing style timestamps sort chronologically.</p>
+<table>
+<thead>
+<tr>
+<th>Commit</th>
+<th>When</th>
+<th>Files changed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ee9fd42</td>
+<td>2026-05-28 09:15</td>
+<td>8</td>
+</tr>
+<tr>
+<td>ff61404</td>
+<td>2026-08-29 11:02</td>
+<td>2</td>
+</tr>
+<tr>
+<td>b7c4437</td>
+<td>2026-05-30 16:44</td>
+<td>5</td>
+</tr>
+<tr>
+<td>39ac813</td>
+<td>2026-06-14 08:30</td>
+<td>1</td>
+</tr>
+</tbody>
+</table>
+<h2 id="percent-and-attached-units">Percent and Attached Units</h2>
+<p>A cell is sorted by its numbers even when the digits carry <code>%</code>, a unit letter,
+or a currency symbol, so a column like this no longer falls back to text
+ordering (<code>9%</code>, <code>100%</code>, <code>95%</code> as strings) and instead reads
+<code>9%</code> &lt; <code>95%</code> &lt; <code>100%</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Quarter</th>
+<th>Coverage</th>
+<th>Traffic</th>
+<th>Budget</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>9%</td>
+<td>1.2m</td>
+<td>$1,250</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>100%</td>
+<td>950k</td>
+<td>$42</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>95%</td>
+<td>3.4m</td>
+<td>$999</td>
+</tr>
+</tbody>
+</table>
+<p>Only the digits are compared — the unit is <em>not</em> interpreted, so keep units
+consistent within a column (<code>1.2m</code> sorts below <code>950k</code> because 1.2 &lt; 950).</p>
+<h2 id="version-like-values">Version-Like Values</h2>
+<p>Values with two or more dots are compared component by component, so the whole
+version decides the order — <code>8.10.0</code> is read as 8, 10, 0 rather than 8.1.</p>
+<table>
+<thead>
+<tr>
+<th>Release</th>
+<th>Version</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>toolkit</td>
+<td>9.0</td>
+</tr>
+<tr>
+<td>driver</td>
+<td>8x.0</td>
+</tr>
+<tr>
+<td>firmware</td>
+<td>8.10.0m</td>
+</tr>
+</tbody>
+</table>
+<p>Sorting <strong>Version</strong> ascending gives <code>8.10.0m</code>, then <code>8x.0</code>, then <code>9.0</code> — the
+leading 8s tie, and a number segment (<code>10</code>) sorts ahead of a text one (<code>x.</code>).
+A single dot is still a decimal point, so <code>1.10</code> sorts as 1.1.</p>
+<h2 id="text-and-numbers-together">Text and Numbers Together</h2>
+<p>The letters around the digits still count, so identifiers and numbered labels
+sort the way they read while file names stay alphabetical.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Chapter</th>
+<th>ID</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>video.mp4</td>
+<td>Chapter 10</td>
+<td>A10</td>
+</tr>
+<tr>
+<td>notes.md</td>
+<td>Chapter 3</td>
+<td>B2</td>
+</tr>
+<tr>
+<td>archive.zip</td>
+<td>Chapter 1</td>
+<td>A2</td>
+</tr>
+<tr>
+<td>config.yaml</td>
+<td>Chapter 2</td>
+<td>A1</td>
+</tr>
+</tbody>
+</table>
+<p><strong>File</strong> sorts alphabetically (<code>archive.zip</code>, <code>config.yaml</code>, <code>notes.md</code>,
+<code>video.mp4</code>) — the <code>4</code> in <code>mp4</code> does not turn it into a number. <strong>Chapter</strong>
+sorts 1, 2, 3, 10 rather than the string order 1, 10, 2, 3. <strong>ID</strong> sorts <code>A1</code>,
+<code>A2</code>, <code>A10</code>, <code>B2</code>: the letter is compared first, then the number as a whole.</p>
+<h2 id="parent-rows-stay-pinned">Parent Rows Stay Pinned</h2>
+<p>In a directory listing below the vault root, the <code>../</code> row always stays at the
+top regardless of sort column — try sorting by Size in <code>guides/</code>.</p>
+<h2 id="mixed-text">Mixed Text</h2>
+<p>Non-numeric cells fall back to case-insensitive string comparison.</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>zebra</td>
+<td>animal</td>
+</tr>
+<tr>
+<td>Apple</td>
+<td>fruit</td>
+</tr>
+<tr>
+<td>mango</td>
+<td>fruit</td>
+</tr>
+<tr>
+<td>Banana</td>
+<td>fruit</td>
+</tr>
+<tr>
+<td>ant</td>
+<td>animal</td>
+</tr>
+</tbody>
+</table>
+<div class="markdown-alert markdown-alert-tip"><p class="markdown-alert-title"><svg class="octicon octicon-light-bulb mr-2" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 1.5c-2.363 0-4 1.69-4 3.75 0 .984.424 1.625.984 2.304l.214.253c.223.264.47.556.673.848.284.411.537.896.621 1.49a.75.75 0 0 1-1.484.211c-.04-.282-.163-.547-.37-.847a8.456 8.456 0 0 0-.542-.68c-.084-.1-.173-.205-.268-.32C3.201 7.75 2.5 6.766 2.5 5.25 2.5 2.31 4.863 0 8 0s5.5 2.31 5.5 5.25c0 1.516-.701 2.5-1.328 3.259-.095.115-.184.22-.268.319-.207.245-.383.453-.541.681-.208.3-.33.565-.37.847a.751.751 0 0 1-1.485-.212c.084-.593.337-1.078.621-1.489.203-.292.45-.584.673-.848.075-.088.147-.173.213-.253.561-.679.985-1.32.985-2.304 0-2.06-1.637-3.75-4-3.75ZM5.75 12h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM6 15.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"/></svg>Tip</p><p>A quick sanity check that sorting and alert callouts coexist on the same
+page without interfering.</p>
+</div>

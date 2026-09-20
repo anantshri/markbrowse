@@ -1,0 +1,57 @@
+<table class="meta-table"><thead><tr><th>title</th><td>Performance Notes</td></tr></thead></table>
+<h1 id="performance-notes">Performance Notes</h1>
+<p>Explains the caching behavior added for markdown pages and the sidebar tree,
+and how to observe it.</p>
+<h2 id="etag--conditional-requests">ETag / Conditional Requests</h2>
+<p>Every markdown response carries an <code>ETag</code> built from the file's modification
+time and size. A repeat request with <code>If-None-Match</code> returns <code>304 Not Modified</code> with an empty body — the file is neither re-read nor re-rendered.</p>
+<pre><code class="language-console">$ curl -sI http://localhost:8080/guides/performance.md | grep -i etag
+etag: &quot;18d047149d4b2d15-fb&quot;
+
+$ curl -s -o /dev/null -w '%{http_code}\n' \
+    -H 'If-None-Match: &quot;18d047149d4b2d15-fb&quot;' \
+    http://localhost:8080/guides/performance.md
+304
+</code></pre>
+<p>Touch the file (<code>touch guides/performance.md</code>) and the same request returns
+<code>200</code> again — the tag tracks the file's mtime and size.</p>
+<h2 id="sidebar-tree-cache">Sidebar Tree Cache</h2>
+<p><code>/__mdview/tree.json</code> is cached for five seconds. Rapid successive page loads
+reuse the cached walk instead of re-scanning the whole tree, so newly created
+files can take up to five seconds to appear in the sidebar.</p>
+<h2 id="lazy-wikilink-index">Lazy Wikilink Index</h2>
+<p>The file index behind <code>[[wiki links]]</code> is built once, on the first link that
+needs it, rather than at server startup — starting <code>markbrowse</code> against a
+large tree no longer pays the full walk up front.</p>
+<h2 id="permission-behavior">Permission Behavior</h2>
+<p>Unreadable paths now fail honestly:</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Before</th>
+<th>Now</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unreadable file</td>
+<td>500</td>
+<td>403 Forbidden</td>
+</tr>
+<tr>
+<td>Unreadable directory</td>
+<td>500</td>
+<td>403 Forbidden</td>
+</tr>
+<tr>
+<td>Unreadable serve root</td>
+<td>server starts, every request fails</td>
+<td>startup aborts with a clear message</td>
+</tr>
+</tbody>
+</table>
+<div class="markdown-alert markdown-alert-warning"><p class="markdown-alert-title"><svg class="octicon octicon-alert mr-2" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/></svg>Warning</p><p>The startup check covers the root directory itself, not every file below
+it; a single unreadable file still serves 403 per-request rather than
+blocking startup.</p>
+</div>
