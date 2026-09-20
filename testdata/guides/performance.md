@@ -32,6 +32,19 @@ Touch the file (`touch guides/performance.md`) and the same request returns
 reuse the cached walk instead of re-scanning the whole tree, so newly created
 files can take up to five seconds to appear in the sidebar.
 
+The response also carries an `ETag` derived from the payload, so a browser
+revalidating it gets `304` and an empty body whenever the tree has not
+changed. The sidebar refetches the tree on every page navigation, and on a
+large vault that payload is a few hundred kilobytes.
+
+## Lazy Sidebar Rendering
+
+The sidebar builds DOM for a folder's contents the first time that folder is
+opened, rather than for the whole tree on load. Only the branch containing the
+page being viewed is expanded up front. On a 4,800-file vault that is about
+170 elements per page load instead of about 10,900. See
+[[sidebar-search]] for the search that rides on top of it.
+
 ## Lazy Wikilink Index
 
 The file index behind `[[wiki links]]` is built once, on the first link that

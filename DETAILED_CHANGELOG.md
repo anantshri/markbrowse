@@ -9,6 +9,121 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-09-20 — Sidebar quick filter and lazy rendering (#18)
+
+**Summary:** Issue #18 asked for two things: a quick filter above the file tree
+("to find the markdown file deep down"), and a fix for load time on large
+folders, "lazy load the content but still provide search capability". Both are
+done, and the second is what makes the first cheap.
+
+**Measured first.** A synthetic vault of 4,800 markdown files in 441
+directories, three levels deep:
+
+| | Before |
+|---|---|
+| `tree.json` build | 14.7 ms cold, **0.5 ms** cached |
+| `tree.json` payload | **311 KB**, `Cache-Control: no-cache`, **no ETag** |
+| DOM elements `sidebar.js` built on load | **10,923** |
+
+So the server was never the problem — the 5-second tree cache already had it at
+half a millisecond. The cost was entirely on the client, and it was paid *on
+every page navigation*: re-download 311 KB, then construct ~10,900 elements,
+because `renderNode` walked the entire tree eagerly and built every folder and
+every file whether or not it was visible.
+
+**What changed:**
+
+- `static/js/sidebar.js` rewritten. A folder's children are built by a closure
+  the first time that folder opens; collapsed folders hold an empty container.
+  The only branch rendered up front is the one containing the current page, so
+  the active file is still visible on load. Result on the same vault: **174
+  elements instead of 10,923**, measured by counting `createElement` calls
+  under the test DOM.
+- The parsed tree stays in memory. That is the answer to "lazy load but still
+  provide search": the filter searches data the DOM has never drawn, with no
+  extra request and no server-side search endpoint.
+- The client-side re-sort is gone. `sortTree` in `handler.go` already emits
+  directories first then alphabetical, so sorting every folder again on every
+  render was pure duplicated work.
+- `handler.go`: `treeJSONCached` now also returns an ETag, computed once per
+  rebuild (so at most once per `treeCacheTTL`, not per request) by hashing the
+  payload. `serveTreeJSON` sets it and answers `If-None-Match` with `304`.
+  `no-cache` is kept — it means "revalidate", not "don't store", and the
+  revalidation is now free.
+- `templates.go`: a `type="search"` input plus an `aria-live` status line above
+  `#tree-root`, in both the markdown and directory-listing templates.
+- `static.go`: styles for the input, status line, match highlight and result
+  rows, using the existing CSS variables so dark mode follows automatically.
+
+**Filter design decisions:**
+
+- *Name by default, path when the query contains `/`.* A bare `guides` matching
+  directory names would return every file under `guides/` — the opposite of
+  finding one file. Typing `guides/table` is the explicit way to ask for a path
+  match.
+- *Capped at 200 results,* with "Showing 200 of N matches". A one-character
+  query on a large vault matches thousands of files, and rendering them all
+  would rebuild the flat equivalent of the tree — reintroducing exactly the
+  stall the lazy rendering removes.
+- *Matches are highlighted* by splitting the name into text nodes around the
+  hit. Built with `createTextNode`, never `innerHTML`: the highlighted span is
+  derived from what the user typed.
+- *Debounced 120 ms,* so typing a word renders once rather than once per key.
+
+**Testing.** `sidebar_test.go` runs the real `static/js/sidebar.js` in goja
+against a stub DOM (~150 lines: elements, `classList`, `textContent`,
+fragments, a class-only `querySelector`, a synchronous `fetch`, and a
+controllable timer queue). Unlike `tablesort.js` this script cannot be
+unwrapped — its IIFE has a top-level `return` for the "no sidebar on this page"
+case, which is a syntax error outside a function — so the tests drive it the
+way a user does: set the input value, fire `input`, flush the debounce, inspect
+what was rendered.
+
+Covered: lazy expansion (nothing from a collapsed folder is rendered; opening
+one renders its children but not its grandchildren), auto-expansion to the
+current page, name matching, path matching via `/`, case-insensitivity,
+highlighting, the 200 cap and its count message, the empty state, clearing,
+`Esc`, and that a file named `<img src=x onerror=...>.md` renders as text.
+`handler_test.go` gains `TestServeTreeJSONETagNotModified` and ETag assertions
+in the existing cache test.
+
+**Commands:**
+```
+# 4,800-file vault, three levels deep
+for a in $(seq 1 40); do for b in $(seq 1 10); do
+  mkdir -p /tmp/bigvault/area-$a/section-$b
+  for f in $(seq 1 12); do echo "# Note $f" > /tmp/bigvault/area-$a/section-$b/note-$f.md; done
+done; done
+
+curl -sI http://127.0.0.1:PORT/__mdview/tree.json          # headers before/after
+curl -H 'If-None-Match: "..."' ...                          # 304, 0 bytes
+go test -run Sidebar ./...
+go test -cover ./...
+aidc-scan
+```
+
+**Verification:**
+- `go test -cover ./...` — pass; main package 76.4% -> **77.3%**.
+- Element counts measured by instrumenting `createElement` in the test DOM and
+  running both the old and new `sidebar.js` against the 4,800-file tree:
+  10,923 -> 174.
+- Live on the big vault: the filter input is present in both templates;
+  `tree.json` returns an `ETag`, a request carrying it gets `304` with 0 bytes,
+  and a request without one gets `200` with 317,988 bytes.
+- `aidc-scan` clean.
+
+**Notes:**
+- Not done: server-side pagination of the tree. It would shrink the 311 KB
+  further, but it would also move search to the server, and the issue asked for
+  lazy loading *without* losing search. With the ETag the payload is fetched
+  once per change rather than once per navigation, which addresses the same
+  cost without that trade.
+- The 5-second `treeCacheTTL` is unchanged, so a new file still takes up to
+  five seconds to appear — and now also needs the ETag to change, which it does
+  because the hash is over the payload.
+
+---
+
 ## 2026-09-20 — goldmark v2, with the markdown extensions vendored into internal/
 
 **Summary:** markbrowse now parses and renders with `github.com/yuin/goldmark/v2`.

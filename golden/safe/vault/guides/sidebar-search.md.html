@@ -1,0 +1,83 @@
+<table class="meta-table"><thead><tr><th>title</th><td>Sidebar Search</td></tr></thead></table>
+<h1 id="sidebar-search">Sidebar Search</h1>
+<p>The box above the file tree filters the whole vault, not just the folders that
+happen to be open. Type part of a file name and every match appears, however
+deep it is buried, with the folders it lives under shown above it.</p>
+<h2 id="what-it-matches">What it matches</h2>
+<table>
+<thead>
+<tr>
+<th>Query</th>
+<th>Matched against</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>no slash</td>
+<td>the file name only</td>
+<td><code>perf</code> finds <code>performance.md</code></td>
+</tr>
+<tr>
+<td>contains <code>/</code></td>
+<td>the whole path</td>
+<td><code>guides/table</code> finds both table guides</td>
+</tr>
+</tbody>
+</table>
+<p>Matching is case-insensitive either way, and the matched characters are
+highlighted in the result.</p>
+<p>Leaving the slash out on purpose is what keeps short queries useful: if a bare
+<code>guides</code> matched directory names too, it would return every file in the folder
+rather than the one you are looking for.</p>
+<h2 id="keys">Keys</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Esc</code></td>
+<td>clears the filter and restores the tree</td>
+</tr>
+</tbody>
+</table>
+<h2 id="limits">Limits</h2>
+<p>At most 200 matches are rendered. Past that the count line reads <em>&quot;Showing 200
+of 1,432 matches&quot;</em> — narrow the query rather than scrolling. The cap exists so
+a one-character query on a large vault cannot rebuild the entire tree as a flat
+list, which is the stall the lazy rendering below is there to avoid.</p>
+<h2 id="why-the-tree-loads-quickly-now">Why the tree loads quickly now</h2>
+<p>The sidebar builds DOM for a folder the first time that folder is opened, not
+when the page loads. Only the branch containing the page you are reading is
+expanded up front.</p>
+<p>On a 4,800-file vault this is the difference between building about 10,900
+elements on every page navigation and building about 170:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Elements built on load</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>every folder rendered up front</td>
+<td>10,923</td>
+</tr>
+<tr>
+<td>rendered on demand</td>
+<td>174</td>
+</tr>
+</tbody>
+</table>
+<p>The full tree is still fetched and kept in memory — that is what lets the
+filter search files it has never drawn. The tree response carries an <code>ETag</code>, so
+after the first page load the browser revalidates it with a <code>304</code> and no body
+instead of re-downloading a few hundred kilobytes of JSON on every navigation.</p>
+<div class="markdown-alert markdown-alert-tip"><p class="markdown-alert-title"><svg class="octicon octicon-light-bulb mr-2" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 1.5c-2.363 0-4 1.69-4 3.75 0 .984.424 1.625.984 2.304l.214.253c.223.264.47.556.673.848.284.411.537.896.621 1.49a.75.75 0 0 1-1.484.211c-.04-.282-.163-.547-.37-.847a8.456 8.456 0 0 0-.542-.68c-.084-.1-.173-.205-.268-.32C3.201 7.75 2.5 6.766 2.5 5.25 2.5 2.31 4.863 0 8 0s5.5 2.31 5.5 5.25c0 1.516-.701 2.5-1.328 3.259-.095.115-.184.22-.268.319-.207.245-.383.453-.541.681-.208.3-.33.565-.37.847a.751.751 0 0 1-1.485-.212c.084-.593.337-1.078.621-1.489.203-.292.45-.584.673-.848.075-.088.147-.173.213-.253.561-.679.985-1.32.985-2.304 0-2.06-1.637-3.75-4-3.75ZM5.75 12h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM6 15.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"/></svg>Tip</p><p>Sorting, callouts and the filter all coexist on this page — a quick check
+that the sidebar scripts and the page scripts do not interfere.</p>
+</div>

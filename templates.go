@@ -48,6 +48,10 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 <div class="mdview-layout">
 <aside class="mdview-sidebar">
 <div class="sidebar-header">Files</div>
+<div class="sidebar-filter">
+<input id="tree-filter" type="search" placeholder="Filter files&hellip;" aria-label="Filter files" aria-controls="tree-root" autocomplete="off" spellcheck="false">
+</div>
+<div id="tree-status" class="tree-status" role="status" aria-live="polite"></div>
 <div id="tree-root"></div>
 </aside>
 <main class="mdview-main">
@@ -86,6 +90,10 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 <div class="mdview-layout">
 <aside class="mdview-sidebar">
 <div class="sidebar-header">Files</div>
+<div class="sidebar-filter">
+<input id="tree-filter" type="search" placeholder="Filter files&hellip;" aria-label="Filter files" aria-controls="tree-root" autocomplete="off" spellcheck="false">
+</div>
+<div id="tree-status" class="tree-status" role="status" aria-live="polite"></div>
 <div id="tree-root"></div>
 </aside>
 <main class="mdview-main">

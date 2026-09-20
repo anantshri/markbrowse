@@ -6,7 +6,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-20
+
+### Added
+- **Sidebar quick filter** (#18). A search box above the file tree filters the
+  whole vault, not just the folders that happen to be open: type part of a
+  name and every match appears with the folders it lives under, matched
+  characters highlighted. A query containing `/` matches the full path instead
+  of the name, `Esc` clears, and results are capped at 200 with a count.
+- `golden/`: golden-file coverage for the markdown pipeline. Every document in
+  `testdata/` plus 12 synthetic cases (all wikilink forms, all alert kinds,
+  mermaid fences, front matter including malformed input, GFM, raw HTML, and
+  the dangerous URL schemes) is rendered in both `--raw-html` modes and
+  compared. Regenerate with `go test -run TestRenderGolden -update-golden`.
+- Unit tests for each vendored extension, at 90–95% statement coverage.
+- `tablesort_test.go`: the embedded `static/js/tablesort.js` is now executed
+  in a JS engine from `go test`, covering ascending and descending order for
+  every value shape the sorter supports and the `../` row detection.
+- The vendored mermaid bundle is pinned by sha256 in `handler_test.go`, and
+  its `securityLevel:"strict"` bootstrap is asserted. Nothing else tracks that
+  file — dependabot reads `go.mod` and the workflows, syft's SBOM sees only Go
+  modules — so bumping mermaid now fails a test until the recorded version and
+  digest are updated with it.
+
 ### Changed
+- **Sidebar renders lazily** (#18). A folder's contents are built the first
+  time it is opened rather than for the entire tree on page load; only the
+  branch containing the current page is expanded up front. On a 4,800-file
+  vault this is 174 DOM elements per page load instead of 10,923. The whole
+  tree is still fetched and held in memory, which is what lets the filter
+  search files it has never drawn.
+- `/__mdview/tree.json` now carries an `ETag` and honours `If-None-Match`, so
+  the sidebar's refetch on every page navigation returns a bodiless `304`
+  instead of re-sending the tree — 311 KB on that same vault.
 - **Migrated to goldmark v2**, and the four markdown extensions are now
   vendored under `internal/` instead of imported. goldmark v2 removed the
   `goldmark.Extender` interface the upstream extensions implement, and none of
@@ -20,7 +52,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     gone, along with the chromedp dependency tree
   - `internal/alerts` — from `goldmark-gh-alerts` (MIT)
   - `internal/frontmatter` — from `goldmark-meta` (MIT), parser only
-
 - **Default bind changed to `127.0.0.1`** (was `0.0.0.0`). The server is
   unauthenticated, so it is no longer network-reachable by default; pass
   `--listen 0.0.0.0` (or a specific address) to expose it. Container port
@@ -55,6 +86,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Dependabot now watches `github-actions` as well as `gomod`; without it the
   action pins never moved and had drifted a full major behind.
 
+### Fixed
+- Table sorting now compares the whole value instead of the first digits
+  `parseFloat` happened to find: cells are split into text and number
+  segments and compared segment by segment, so `8x.0` sorts before `9.0`,
+  `95%` before `100%`, `A1` before `A10` before `B2`, and `Chapter 3` before
+  `Chapter 10`. Values with `%`/unit/currency attachments (`1.2m`, `$1,234`)
+  and version-like values (`8.9.0` before `8.10.0`) no longer fall into the
+  plain-text branch (#19).
+- Directory listings: the `../` row of a first-level directory now links to
+  `/` instead of the `//` protocol-relative URL, and the sorter matches the
+  row by its `../` label, so the parent row really stays pinned above the
+  sorted rows (#19).
+
 ### Security
 - The front matter YAML parse error, which is emitted as an HTML comment when
   a metadata block fails to parse, can no longer close that comment early:
@@ -71,35 +115,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `.git`, `.hg`, `.svn` and `.bzr` directories are never served, listed in the
   sidebar, or wikilink-indexed (secreports/report1.md finding 4). Other
   dot-directories (`.obsidian` vaults) remain browsable.
-
-### Fixed
-- Table sorting now compares the whole value instead of the first digits
-  `parseFloat` happened to find: cells are split into text and number
-  segments and compared segment by segment, so `8x.0` sorts before `9.0`,
-  `95%` before `100%`, `A1` before `A10` before `B2`, and `Chapter 3` before
-  `Chapter 10`. Values with `%`/unit/currency attachments (`1.2m`, `$1,234`)
-  and version-like values (`8.9.0` before `8.10.0`) no longer fall into the
-  plain-text branch (#19).
-- Directory listings: the `../` row of a first-level directory now links to
-  `/` instead of the `//` protocol-relative URL, and the sorter matches the
-  row by its `../` label, so the parent row really stays pinned above the
-  sorted rows (#19).
-
-### Added
-- `golden/`: golden-file coverage for the markdown pipeline. Every document in
-  `testdata/` plus 12 synthetic cases (all wikilink forms, all alert kinds,
-  mermaid fences, front matter including malformed input, GFM, raw HTML, and
-  the dangerous URL schemes) is rendered in both `--raw-html` modes and
-  compared. Regenerate with `go test -run TestRenderGolden -update-golden`.
-- Unit tests for each vendored extension, at 90–95% statement coverage.
-- `tablesort_test.go`: the embedded `static/js/tablesort.js` is now executed
-  in a JS engine from `go test`, covering ascending and descending order for
-  every value shape the sorter supports and the `../` row detection.
-- The vendored mermaid bundle is pinned by sha256 in `handler_test.go`, and
-  its `securityLevel:"strict"` bootstrap is asserted. Nothing else tracks that
-  file — dependabot reads `go.mod` and the workflows, syft's SBOM sees only Go
-  modules — so bumping mermaid now fails a test until the recorded version and
-  digest are updated with it.
 
 ## [0.3.0] - 2026-08-30
 
@@ -193,7 +208,8 @@ Initial public release.
 - Breadcrumb navigation on all pages.
 - Single-binary distribution, zero configuration.
 
-[Unreleased]: https://github.com/anantshri/markbrowse/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/anantshri/markbrowse/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/anantshri/markbrowse/releases/tag/v0.4.0
 [0.3.0]: https://github.com/anantshri/markbrowse/releases/tag/v0.3.0
 [0.2.0]: https://github.com/anantshri/markbrowse/releases/tag/v0.2.0
 [0.1.2]: https://github.com/anantshri/markbrowse/releases/tag/v0.1.2

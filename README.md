@@ -5,7 +5,7 @@ A minimal markdown file viewer. Point it at any directory and it starts a web se
 ## Features
 
 - Renders markdown files as HTML with GitHub-flavored styling (light + dark mode)
-- Collapsible sidebar file tree for navigating the directory
+- Collapsible sidebar file tree for navigating the directory, with a quick filter that searches the whole vault by file name (or by path when the query contains `/`)
 - Uses directories' `README.md` or `INDEX.md` as the index page
 - Falls back to a file listing when no index markdown is present
 - Serves non-markdown files as-is (images, PDFs, etc.)

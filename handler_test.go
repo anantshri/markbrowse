@@ -241,15 +241,21 @@ func TestTreeJSONCachedRebuildsAfterTTL(t *testing.T) {
 	}
 	h := &fileHandler{root: dir}
 
-	first := h.treeJSONCached()
+	first, firstETag := h.treeJSONCached()
 	if first == nil || !strings.Contains(string(first), "a.md") {
 		t.Fatalf("first tree missing a.md: %s", first)
 	}
+	if firstETag == "" {
+		t.Fatal("rebuilt tree should carry an ETag")
+	}
 
 	// A second call inside the TTL must return the cached bytes (no rebuild).
-	again := h.treeJSONCached()
+	again, againETag := h.treeJSONCached()
 	if !bytes.Equal(first, again) {
 		t.Fatal("cached tree should be identical within TTL")
+	}
+	if againETag != firstETag {
+		t.Errorf("ETag changed without a rebuild: %s -> %s", firstETag, againETag)
 	}
 
 	// Add a file, then force expiry and confirm the tree is rebuilt.
@@ -257,9 +263,58 @@ func TestTreeJSONCachedRebuildsAfterTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.treeAt = time.Now().Add(-treeCacheTTL - time.Second)
-	rebuilt := h.treeJSONCached()
+	rebuilt, rebuiltETag := h.treeJSONCached()
 	if !strings.Contains(string(rebuilt), "b.md") {
 		t.Fatalf("rebuilt tree missing b.md: %s", rebuilt)
+	}
+	// A changed tree must change the ETag, or browsers keep a stale sidebar.
+	if rebuiltETag == firstETag {
+		t.Errorf("ETag %s unchanged after the tree gained a file", rebuiltETag)
+	}
+}
+
+// TestServeTreeJSONETagNotModified covers the request path: the sidebar
+// refetches the tree on every page navigation, so an unchanged tree must come
+// back as a bodiless 304 rather than as a few hundred KB of JSON.
+func TestServeTreeJSONETagNotModified(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte("# a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &fileHandler{root: dir}
+
+	req := httptest.NewRequest(http.MethodGet, "/__mdview/tree.json", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first request = %d, want 200", rec.Code)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("no ETag on the tree response")
+	}
+	if rec.Body.Len() == 0 {
+		t.Fatal("first request returned an empty body")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/__mdview/tree.json", nil)
+	req.Header.Set("If-None-Match", etag)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("revalidation = %d, want 304", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("304 must have an empty body, got %d bytes", rec.Body.Len())
+	}
+
+	// A stale validator must still get the full tree.
+	req = httptest.NewRequest(http.MethodGet, "/__mdview/tree.json", nil)
+	req.Header.Set("If-None-Match", `"stale"`)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Errorf("stale validator = %d with %d bytes, want 200 with a body", rec.Code, rec.Body.Len())
 	}
 }
 

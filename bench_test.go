@@ -20,7 +20,7 @@ func BenchmarkTreeBuild(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		h := &fileHandler{root: dir}
-		if h.treeJSONCached() == nil {
+		if data, _ := h.treeJSONCached(); data == nil {
 			b.Fatal("nil tree")
 		}
 	}
@@ -40,7 +40,7 @@ func BenchmarkTreeJSONCached(b *testing.B) {
 	h.treeJSONCached() // warm the cache once
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if h.treeJSONCached() == nil {
+		if data, _ := h.treeJSONCached(); data == nil {
 			b.Fatal("nil tree")
 		}
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -23,6 +24,7 @@ type fileHandler struct {
 
 	treeMu   sync.Mutex
 	treeJSON []byte
+	treeETag string
 	treeAt   time.Time
 
 	resolveOnce  sync.Once
@@ -411,11 +413,11 @@ const treeCacheTTL = 5 * time.Second
 // once per treeCacheTTL. The walk, prune and sort are the most expensive
 // work the server does on every page load, so caching avoids repeating it
 // for rapid successive requests (e.g. the sidebar fetching on each page).
-func (h *fileHandler) treeJSONCached() []byte {
+func (h *fileHandler) treeJSONCached() ([]byte, string) {
 	h.treeMu.Lock()
 	defer h.treeMu.Unlock()
 	if h.treeJSON != nil && time.Since(h.treeAt) < treeCacheTTL {
-		return h.treeJSON
+		return h.treeJSON, h.treeETag
 	}
 
 	root := treeEntry{
@@ -459,19 +461,35 @@ func (h *fileHandler) treeJSONCached() []byte {
 	data, err := json.Marshal(root)
 	if err != nil {
 		log.Printf("tree json encode error: %v", err)
-		return nil
+		return nil, ""
 	}
+	// The payload is the only reliable identity for the tree: it changes
+	// whenever a markdown file is added, removed or renamed anywhere beneath
+	// the root, and nothing cheaper tracks that. Hashing here rather than per
+	// request means it costs once per rebuild, at most once per treeCacheTTL.
+	sum := sha256.Sum256(data)
 	h.treeJSON = data
+	h.treeETag = fmt.Sprintf(`"%x"`, sum[:16])
 	h.treeAt = time.Now()
-	return data
+	return h.treeJSON, h.treeETag
 }
 
-func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache")
-	data := h.treeJSONCached()
+func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, r *http.Request) {
+	data, etag := h.treeJSONCached()
 	if data == nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	// no-cache means "revalidate", not "don't store": the sidebar refetches the
+	// tree on every page navigation, and on a large vault that payload is a few
+	// hundred KB. With an ETag the revalidation is a 304 with no body whenever
+	// the tree has not changed.
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- JSON payload of server-walked filenames, serialized by encoding/json
