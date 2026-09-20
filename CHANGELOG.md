@@ -19,6 +19,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `javascript:`/`vbscript:`/`file:`/`data:` link targets are filtered;
   `--raw-html` restores the previous pass-through behavior for trusted
   content.
+- Minimum Go version is now 1.25 (was 1.24), and CI/release build with it.
+  Required by `github.com/dop251/goja`, the JS engine the new table-sorting
+  tests run `static/js/tablesort.js` in.
+- Dependencies: `github.com/yuin/goldmark` 1.8.5 → 1.8.6 (#17, two
+  `URLEscape` fixes plus an extension fix), `gopkg.in/yaml.v2` 2.3.0 → 2.4.0
+  (#16).
 
 ### Security
 - Fix stored XSS: `<script>`/event-handler HTML in served markdown no longer
@@ -42,6 +48,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/` instead of the `//` protocol-relative URL, and the sorter matches the
   row by its `../` label, so the parent row really stays pinned above the
   sorted rows (#19).
+
+### Added
+- `tablesort_test.go`: the embedded `static/js/tablesort.js` is now executed
+  in a JS engine from `go test`, covering ascending and descending order for
+  every value shape the sorter supports and the `../` row detection.
 
 ## [0.3.0] - 2026-08-30
 
