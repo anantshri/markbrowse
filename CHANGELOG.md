@@ -87,6 +87,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   action pins never moved and had drifted a full major behind.
 
 ### Fixed
+- The sidebar now reveals and highlights the page you opened directly, not
+  just ones you clicked through to (#18). When a directory serves its index,
+  the page reports the file actually rendered (`/guides/README.md`) rather
+  than the directory that was requested (`/guides`) — the sidebar only has a
+  node for the file, so the old value matched nothing and the tree stayed
+  collapsed with nothing marked. A directory *listing* reports itself with a
+  trailing slash, which opens that folder without marking any file.
 - Table sorting now compares the whole value instead of the first digits
   `parseFloat` happened to find: cells are split into text and number
   segments and compared segment by segment, so `8x.0` sorts before `9.0`,

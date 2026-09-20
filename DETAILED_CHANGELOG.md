@@ -112,6 +112,46 @@ aidc-scan
   and a request without one gets `200` with 317,988 bytes.
 - `aidc-scan` clean.
 
+**Follow-up in the same session — the sidebar stayed collapsed on a page
+opened directly.** Reported as: opening a page directly leaves the sidebar
+collapsed, while clicking through to the same page reveals and marks it.
+
+Both are ordinary full page loads, so the asymmetry pointed at the value the
+sidebar matches on, and it turned out to be a server-side bug predating all of
+this. `data-current-path` comes from `pageData.CurrentPath`, and when a
+directory serves its index, `serveDirectory` called `serveMarkdown` with the
+*directory's* request path:
+
+| URL | reported | file node in the tree | matched |
+|---|---|---|---|
+| `/` | `/` | `/README.md` | no |
+| `/guides/` | `/guides` | `/guides/README.md` | no |
+| `/guides/README.md` | `/guides/README.md` | `/guides/README.md` | yes |
+
+The sidebar only ever has a node for the *file*, so there was nothing to match
+and no ancestor to expand. Clicking the file in the sidebar navigates to
+`/guides/README.md`, which is why that path worked — exactly the asymmetry
+reported.
+
+Fixed by separating the two meanings `relPath` was carrying. `serveMarkdown`
+now takes both a `relPath` (the request path, still what breadcrumbs are built
+from) and a `currentPath` (the URL of the file actually rendered). The direct
+-file call site passes the same value twice; the directory-index call site
+passes `path.Join(relPath, name)`, which also keeps the root as `/README.md`
+rather than `//README.md`. Breadcrumbs are deliberately untouched.
+
+A directory *listing* has no file on screen, so it reports itself with a
+trailing slash via a new `dirCurrentPath` helper — the sidebar prefix-matches
+that and opens the folder without marking anything. That also retires the
+`CurrentPath: relPath + "/"` expression that produced `//` at the root, noted
+as harmless in the goldmark entry above and now simply gone.
+
+Covered by `TestCurrentPathNamesTheRenderedFile` (six URL shapes: root index,
+nested index, `INDEX.md` index, file direct, index file direct, listing) and
+`TestSidebarRevealsIndexAndListingPages` on the JS side, which asserts an
+index page marks its file and opens its folder while a listing page opens the
+folder and marks nothing.
+
 **Notes:**
 - Not done: server-side pagination of the tree. It would shrink the 311 KB
   further, but it would also move search to the server, and the issue asked for

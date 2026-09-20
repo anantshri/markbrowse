@@ -301,6 +301,63 @@ func TestSidebarExpandsToCurrentPath(t *testing.T) {
 	}
 }
 
+// TestSidebarRevealsIndexAndListingPages covers the two page kinds whose URL
+// is not a file node's path. A directory index reports the index file, so that
+// file is revealed and marked; a directory listing reports the directory with
+// a trailing slash, so the folder opens with nothing marked — there is no file
+// on screen to mark.
+func TestSidebarRevealsIndexAndListingPages(t *testing.T) {
+	tree := node("vault", "/",
+		node("guides", "/guides/",
+			node("README.md", "/guides/README.md"),
+			node("intro.md", "/guides/intro.md"),
+		),
+		node("notes", "/notes/",
+			node("daily.md", "/notes/daily.md"),
+		),
+	)
+
+	t.Run("directory index reveals its index file", func(t *testing.T) {
+		vm := sidebarVM(t, tree, "/guides/README.md")
+		rows := renderedRows(t, vm)
+		if !hasRow(rows, "active", "README.md") {
+			t.Errorf("the index file was not marked active: %v", rows)
+		}
+		if !hasRowText(rows, "intro.md") {
+			t.Errorf("its folder was not opened: %v", rows)
+		}
+		if hasRowText(rows, "daily.md") {
+			t.Errorf("an unrelated folder was opened: %v", rows)
+		}
+	})
+
+	t.Run("directory listing opens the folder", func(t *testing.T) {
+		vm := sidebarVM(t, tree, "/guides/")
+		rows := renderedRows(t, vm)
+		if !hasRowText(rows, "intro.md") {
+			t.Errorf("the listed folder was not opened: %v", rows)
+		}
+		for _, r := range rows {
+			if strings.Contains(r, "active") {
+				t.Errorf("nothing should be marked active on a listing page: %v", rows)
+				break
+			}
+		}
+	})
+
+	t.Run("root index reveals the root readme", func(t *testing.T) {
+		rootTree := node("vault", "/",
+			node("README.md", "/README.md"),
+			node("guides", "/guides/", node("intro.md", "/guides/intro.md")),
+		)
+		vm := sidebarVM(t, rootTree, "/README.md")
+		rows := renderedRows(t, vm)
+		if !hasRow(rows, "active", "README.md") {
+			t.Errorf("the root readme was not marked active: %v", rows)
+		}
+	})
+}
+
 // TestSidebarFilter is the search half of issue #18.
 func TestSidebarFilter(t *testing.T) {
 	vm := sidebarVM(t, sampleTree(), "/README.md")

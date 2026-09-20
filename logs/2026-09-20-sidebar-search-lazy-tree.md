@@ -137,6 +137,75 @@ aidc-scan
   `/guides/sidebar-search.md`.
 - `gofmt -l` clean, `go vet ./...` clean, `aidc-scan` clean.
 
+## Follow-up: sidebar collapsed on a directly-opened page
+
+Reported mid-session: opening a page directly leaves the sidebar collapsed,
+whereas clicking through to the same page reveals and marks it.
+
+### Diagnosis
+
+Both are ordinary full page loads — markbrowse has no client-side routing — so
+the asymmetry had to be in the value the sidebar matches on. Reproduced with a
+vault containing `README.md` at the root and in `guides/`:
+
+```
+/                      data-current-path="/"
+/guides/               data-current-path="/guides"
+/guides/README.md      data-current-path="/guides/README.md"
+/guides/intro.md       data-current-path="/guides/intro.md"
+
+file nodes in tree.json:  /README.md  /guides/README.md  /guides/intro.md
+```
+
+The first two match nothing. `serveDirectory` serves a directory's index by
+calling `serveMarkdown` with the *directory's* request path, and `CurrentPath`
+was taken straight from it — but the sidebar only has a node for the file. So
+the page rendered `/guides/README.md` while claiming to be `/guides`, and
+nothing highlighted or expanded. Clicking the file in the sidebar navigates to
+`/guides/README.md`, which is why that route worked.
+
+Pre-existing: the old `sidebar.js` matched on the same equality, so this was
+never about the lazy-rendering rewrite.
+
+### Change
+
+`relPath` was carrying two meanings. Split them:
+
+```go
+// relPath is the request path, used for breadcrumbs; currentPath is the URL of
+// the file actually being rendered, which the sidebar matches against.
+func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath, currentPath string)
+```
+
+- direct file request → `serveMarkdown(..., relPath, relPath)`
+- directory index → `serveMarkdown(..., relPath, path.Join(relPath, name))`
+
+`path.Join` also handles the root: `/` + `README.md` is `/README.md`, not
+`//README.md`.
+
+Directory *listings* have no file on screen, so they report themselves with a
+trailing slash through a new `dirCurrentPath` helper. The sidebar
+prefix-matches that and opens the folder without marking any file — and the
+old `relPath + "/"` expression, which produced `//` at the root, is gone.
+
+Breadcrumbs still use `relPath` and are unchanged.
+
+### Verification
+
+```
+/                      data-current-path="/README.md"
+/guides/               data-current-path="/guides/README.md"
+/guides/README.md      data-current-path="/guides/README.md"
+/guides/intro.md       data-current-path="/guides/intro.md"
+```
+
+- `TestCurrentPathNamesTheRenderedFile` — six URL shapes: root index, nested
+  index, `INDEX.md` index, file direct, index file direct, listing.
+- `TestSidebarRevealsIndexAndListingPages` — on the JS side: an index page
+  marks its file and opens its folder; a listing page opens the folder and
+  marks nothing.
+- Coverage 77.3% -> **77.5%**.
+
 ## Notes
 
 - `sidebar.js` could not be tested the way `tablesort.js` is. That test

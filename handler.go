@@ -179,7 +179,7 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-		h.serveMarkdown(w, r, resolved, relPath)
+		h.serveMarkdown(w, r, resolved, relPath, relPath)
 		return
 	}
 
@@ -210,7 +210,9 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 		}
 		// #nosec G304 G703 -- resolved passed resolveContained (EvalSymlinks + underRoot against the resolved root) immediately above
 		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
-			h.serveMarkdown(w, r, resolved, relPath)
+			// path.Join keeps the root case right: "/" + "README.md" is
+			// "/README.md", not "//README.md".
+			h.serveMarkdown(w, r, resolved, relPath, path.Join(relPath, name))
 			return
 		}
 	}
@@ -256,12 +258,14 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 	}
 
 	data := dirData{
-		Path:        relPath,
-		CSS:         h.css(),
-		HasParent:   relPath != "/",
-		ParentPath:  parentPath(relPath),
-		Entries:     dirEntries,
-		CurrentPath: relPath + "/",
+		Path:       relPath,
+		CSS:        h.css(),
+		HasParent:  relPath != "/",
+		ParentPath: parentPath(relPath),
+		Entries:    dirEntries,
+		// Trailing slash so the sidebar can prefix-match this directory and
+		// open it; parentPath keeps the root from becoming "//".
+		CurrentPath: dirCurrentPath(relPath),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -270,7 +274,13 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 	}
 }
 
-func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
+// serveMarkdown renders a markdown file. relPath is the request path, used for
+// breadcrumbs; currentPath is the URL of the file actually being rendered,
+// which the sidebar matches against to highlight and reveal it. The two differ
+// when a directory serves its index: the request is for /guides/ but the file
+// on screen is /guides/README.md, and the sidebar has a node only for the
+// latter.
+func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPath, relPath, currentPath string) {
 	// #nosec G304 G703 -- fsPath passed through resolveContained (EvalSymlinks + underRoot) in ServeHTTP, or from the containment-checked index candidates in serveDirectory
 	info, err := os.Stat(fsPath)
 	if err != nil {
@@ -331,7 +341,7 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 		Body:        template.HTML(body),
 		Breadcrumbs: buildBreadcrumbs(relPath),
 		HasMermaid:  strings.Contains(body, `class="mermaid"`),
-		CurrentPath: relPath,
+		CurrentPath: currentPath,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -371,6 +381,16 @@ func buildBreadcrumbs(relPath string) []breadcrumb {
 // path.Dir("/sub") == "/" must stay "/": appending another slash yields "//",
 // which a URL parser reads as the start of an authority (a protocol-relative
 // URL) rather than as the root path.
+// dirCurrentPath is the trailing-slash form of a directory's own path, used by
+// the sidebar to decide which folder to open. The root is already its own
+// trailing-slash form.
+func dirCurrentPath(relPath string) string {
+	if relPath == "/" {
+		return "/"
+	}
+	return relPath + "/"
+}
+
 func parentPath(relPath string) string {
 	dir := path.Dir(relPath)
 	if dir == "/" {

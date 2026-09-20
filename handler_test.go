@@ -413,6 +413,79 @@ func TestTemplatesIncludeClientScripts(t *testing.T) {
 	}
 }
 
+// TestCurrentPathNamesTheRenderedFile covers what the sidebar matches against.
+// A directory that has an index serves a file whose URL is not the request
+// URL, and the sidebar only has a node for the file — so reporting the
+// directory path left the tree collapsed with nothing highlighted, while
+// clicking the same file in the sidebar (which navigates to the file's own
+// URL) worked.
+func TestCurrentPathNamesTheRenderedFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "guides", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{
+		"README.md":             "# Root",
+		"guides/README.md":      "# Guides",
+		"guides/intro.md":       "# Intro",
+		"guides/deep/INDEX.md":  "# Deep",
+		"guides/deep/buried.md": "# Buried",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(path)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A directory with no index at all still needs a sane value.
+	if err := os.MkdirAll(filepath.Join(dir, "plain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plain", "note.md"), []byte("# Note"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	for _, tc := range []struct {
+		name string
+		url  string
+		want string
+	}{
+		// Directory indexes: the value must name the file on screen, not the
+		// directory that was requested.
+		{"root index", "/", `/README.md`},
+		{"nested index", "/guides/", `/guides/README.md`},
+		{"INDEX.md index", "/guides/deep/", `/guides/deep/INDEX.md`},
+
+		// Files requested directly were already correct; keep them that way.
+		{"file direct", "/guides/intro.md", `/guides/intro.md`},
+		{"index file direct", "/guides/README.md", `/guides/README.md`},
+
+		// A directory with no index renders a listing. There is no file to
+		// point at, so it names itself with a trailing slash, which is what
+		// lets the sidebar open that folder — and the root must not become
+		// the "//" protocol-relative form.
+		{"listing", "/plain/", `/plain/`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200", tc.url, rec.Code)
+			}
+			want := `data-current-path="` + tc.want + `"`
+			if !strings.Contains(rec.Body.String(), want) {
+				got := "none"
+				if i := strings.Index(rec.Body.String(), `data-current-path="`); i >= 0 {
+					rest := rec.Body.String()[i:]
+					got = rest[:strings.Index(rest[19:], `"`)+20]
+				}
+				t.Errorf("GET %s carried %s, want %s", tc.url, got, want)
+			}
+		})
+	}
+}
+
 // TestMermaidBootstrapIsHardened pins the two mermaid.initialize options that
 // are not cosmetic. securityLevel:"strict" is what keeps diagram labels from
 // executing script; it is mermaid's default, but the default is exactly the
