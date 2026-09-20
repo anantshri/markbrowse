@@ -30,6 +30,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sidebar, or wikilink-indexed (secreports/report1.md finding 4). Other
   dot-directories (`.obsidian` vaults) remain browsable.
 
+### Fixed
+- Table sorting now compares the whole value instead of the first digits
+  `parseFloat` happened to find: cells are split into text and number
+  segments and compared segment by segment, so `8x.0` sorts before `9.0`,
+  `95%` before `100%`, `A1` before `A10` before `B2`, and `Chapter 3` before
+  `Chapter 10`. Values with `%`/unit/currency attachments (`1.2m`, `$1,234`)
+  and version-like values (`8.9.0` before `8.10.0`) no longer fall into the
+  plain-text branch (#19).
+- Directory listings: the `../` row of a first-level directory now links to
+  `/` instead of the `//` protocol-relative URL, and the sorter matches the
+  row by its `../` label, so the parent row really stays pinned above the
+  sorted rows (#19).
+
+## [0.3.0] - 2026-08-30
 
 ### Added
 - Client-side table sorting: click any table header (markdown tables and the
