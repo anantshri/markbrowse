@@ -9,6 +9,135 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-09-20 — Bring every pinned dependency to latest (Go modules, Actions, gosec/syft/grype, mermaid 12)
+
+**Summary:** A full sweep for "latest version" across every kind of pin in the
+repo, not just the ones dependabot was configured to see. The Go module bumps
+were routine; the interesting findings were that three whole classes of
+dependency had no automation watching them at all.
+
+**What was already current:** every *direct* Go module. `goldmark` 1.8.6,
+`goldmark-meta` v1.1.0, `goldmark-gh-alerts`, `mermaid`/`wikilink` v0.6.0 and
+`yaml.v2` v2.4.0 are each the newest release of their current major.
+
+**What was stale, and why nothing caught it:**
+
+| Pin | Was | Now | Watched by dependabot? |
+|---|---|---|---|
+| indirect Go modules | x/text 0.3.8 (2022), regexp2 2.5.2, sourcemap 2.1.3, pprof 2023 | 0.42.0 / 2.8.0 / 2.1.4 / 2026 | yes, but `go get -u ./...` skips test-only deps — it needs `-t` |
+| `actions/checkout` | v6.0.2 (and a v6 pin in sbom.yml) | v7.0.1 | **no** |
+| `actions/setup-go` | v6.4.0 | v7.0.0 | **no** |
+| `actions/upload-artifact` (sbom.yml) | v4 | v7.0.1 | **no** |
+| `softprops/action-gh-release` | v3.0.0 | v3.0.3 | **no** |
+| gosec | v2.22.3 | v2.29.0 | **no** (a `go install` line in a `run:` step) |
+| syft / grype | v1.18.1 / v0.87.0 | v1.52.0 / v0.119.0 | **no** (checksum-pinned downloads) |
+| mermaid bundle | 11.15.0 | 12.0.0 | **no** (a vendored file) |
+
+`.github/dependabot.yml` only declared the `gomod` ecosystem, so every action
+pin was frozen from the day it was written — checkout and setup-go were a full
+major behind. Added a `github-actions` entry; dependabot understands SHA pins
+with a trailing version comment and rewrites both.
+
+**Action major bumps checked for breaking changes before taking them:**
+checkout v7 blocks fork-PR checkout under `pull_request_target`/`workflow_run`
+(this repo triggers on `push` and `pull_request`, unaffected) and moved to
+ESM; setup-go v7 is an ESM migration; upload-artifact v5/v6/v7 are Node 24 and
+ESM moves with `name`/`path` unchanged. All SHAs resolved with
+`git ls-remote refs/tags/<tag>` and recorded with the version in a comment.
+syft/grype checksums came from each release's own `checksums.txt`, which is
+the bump procedure the workflow comment already documents.
+
+**Go toolchain, again:** `go get -u -t ./...` moved the `go` directive 1.25.0
+→ 1.26.0, because `golang.org/x/text@v0.42.0` declares `go 1.26.0`. Worth
+being explicit about the shape of this: x/text is reached only through goja,
+which is a *test-only* dependency, so it is not linked into the release binary
+— but the `go` directive is module-wide, so the release build needs 1.26 too.
+CI and release workflows moved to `go-version: "1.26"` to match. Pinning
+x/text to its last `go 1.25` release would avoid this; not done, because the
+instruction was to be on latest and Go 1.26 is the current release.
+
+**Mermaid 11.15.0 → 12.0.0 (deliberate, user-chosen):** the vendored
+`static/js/mermaid.min.js` was confirmed byte-identical to npm
+`mermaid@11.15.0`'s `dist/mermaid.min.js` (sha256
+`70137e77…`), so the swap is a clean artifact replacement rather than a
+re-bundle. v12 is a breaking major:
+
+- ELK replaces dagre as the default layout engine.
+- `neo` replaces `classic` as the default look; `redux-color` replaces
+  `default` as the theme.
+- Requires ES2024 — Safari 17.4+, current Chrome/Firefox/Edge.
+- Bundle grows 3.2 MB → 5.3 MB (ELK is bundled in).
+
+The choice was between pinning the old rendering (`layout:"dagre"`,
+`look:"classic"`) and adopting v12's defaults; **adopting the new defaults was
+chosen**, so `theme:"default"` was dropped from `mermaid.initialize` in
+`templates.go`. Existing diagrams will visibly re-lay-out and restyle. The
+bundle is still only served on pages that contain a diagram, so the size
+increase does not touch ordinary markdown pages.
+
+`securityLevel:"strict"` was deliberately *kept* — it was added by the
+2026-08-30 raw-HTML hardening, and "mermaid defaults to strict" is exactly the
+assumption a major version invalidates. Verified the v12 bundle still honours
+it (31 occurrences, same `strict`/`antiscript`/`sandbox`/`loose` levels) and
+still installs `globalThis["mermaid"]`, which the classic `<script src>` load
+in the template depends on.
+
+**Tests:** the mermaid bundle was previously untracked by anything — not
+dependabot, not the SBOM (syft sees Go modules and workflow actions here, not
+vendored JS). That invisibility is how it sat three minors and a major behind.
+Added to `handler_test.go`:
+- `mermaidVendoredVersion` / `mermaidVendoredSHA256` constants plus
+  `TestMermaidAssetIsTheVendoredBundle`, which digests the embedded bytes.
+  Bumping mermaid now *fails* until both constants are updated in the same
+  commit — the point being that the version in the tree is always one someone
+  chose.
+- `TestMermaidBootstrapIsHardened`, asserting `securityLevel:"strict"`,
+  `startOnLoad:false` and `mermaid.run()` survive, and that a diagram-free
+  page does not pull the bundle.
+
+**Commands:**
+```
+go list -m -u all
+go get -u -t ./...            # -t: without it, test-only deps are skipped
+go mod tidy
+git ls-remote --tags --refs https://github.com/actions/checkout      # + each action
+git ls-remote https://github.com/actions/checkout refs/tags/v7.0.1   # -> pin SHA
+curl -fsSL .../syft_1.52.0_checksums.txt | grep linux_amd64.tar.gz
+npm registry: mermaid dist-tags -> 12.0.0; tarball dist/mermaid.min.js vendored
+go build ./... && go vet ./... && go test -cover ./...
+aidc-scan
+```
+
+**Verification:**
+- `go build ./...`, `go vet ./...` clean; `go test -cover ./...` pass at 76.1%.
+- Vendored 11.15.0 bundle hashed against the npm tarball to prove the file was
+  unmodified before replacing it.
+- v12 bundle inspected for `globalThis["mermaid"]`, `securityLevel` and the
+  `strict`/`sandbox`/`loose` levels before dropping the theme pin.
+- Live run: `guides/getting-started.md` emits `<pre class="mermaid">`, loads
+  `/__mdview/mermaid.js` (200, `application/javascript`, 5,575,485 bytes) and
+  bootstraps `mermaid.initialize({startOnLoad:false,securityLevel:"strict"})`;
+  `guides/table-sorting.md`, which has no diagram, loads neither.
+- `aidc-scan` clean with the 5 MB bundle in scope.
+
+**Notes / residual risk:**
+- **Mermaid rendering itself is not verified.** There is no browser or node in
+  this container, so "diagrams still draw correctly under ELK/neo" is
+  unproven — only that the bundle loads, exports the global, and keeps the
+  security option. Worth one manual pass over a page with diagrams.
+- `goldmark/v2` (v2.1.5) and `goldmark-meta/v2` (v2.0.2) exist, and the Go
+  version that previously blocked them is no longer a constraint. Still not
+  adoptable: `goldmark-gh-alerts`, `go.abhg.dev/goldmark/mermaid` and
+  `go.abhg.dev/goldmark/wikilink` have no v2 module path (404 / no matching
+  version), and their extenders implement the *v1* `goldmark.Extender`
+  interface, so they cannot register on a v2 `goldmark.Markdown`. Migrating
+  means dropping or forking three extensions — a rewrite, not an upgrade.
+- `gopkg.in/yaml.v2` stays at v2.4.0, which is the last v2 release. Moving to
+  yaml.v3 is not available as a version bump: `markdown.go` consumes
+  `yaml.MapSlice` returned by `goldmark-meta` v1, and that type is v2-only.
+
+---
+
 ## 2026-09-20 — Table sorting compares whole values (#19, PR #20); dependabot bumps (#16, #17)
 
 **Summary:** Integrated the three open pull requests. PR #20 (ai-anant) fixes

@@ -61,7 +61,7 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 {{.Body}}
 </article>
 {{if .HasMermaid}}<script src="/__mdview/mermaid.js"></script>
-<script>mermaid.initialize({startOnLoad:false,theme:"default",securityLevel:"strict"});mermaid.run();</script>{{end}}
+<script>mermaid.initialize({startOnLoad:false,securityLevel:"strict"});mermaid.run();</script>{{end}}
 </div>
 </main>
 <nav class="mdview-toc" id="toc-root" aria-label="Table of contents"></nav>
