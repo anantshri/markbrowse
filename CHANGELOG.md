@@ -19,6 +19,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `javascript:`/`vbscript:`/`file:`/`data:` link targets are filtered;
   `--raw-html` restores the previous pass-through behavior for trusted
   content.
+- **Mermaid upgraded 11.15.0 → 12.0.0**, adopting its new defaults: the ELK
+  layout engine (was dagre), the `neo` look, and the `redux-color` theme.
+  **Existing diagrams will re-lay-out and restyle.** Mermaid 12 needs an
+  ES2024 browser (Safari 17.4+, current Chrome/Firefox/Edge), and the bundle
+  grows from 3.2 MB to 5.3 MB — it is still only loaded on pages that
+  actually contain a diagram. `securityLevel:"strict"` is unchanged and now
+  covered by a test.
+- Minimum Go version is now 1.26 (was 1.24), and CI/release build with it.
+  Go 1.25 is required by `github.com/dop251/goja`, the JS engine the new
+  table-sorting tests run `static/js/tablesort.js` in; 1.26 by
+  `golang.org/x/text`.
+- Dependencies at latest: `github.com/yuin/goldmark` 1.8.5 → 1.8.6 (#17, two
+  `URLEscape` fixes plus an extension fix), `gopkg.in/yaml.v2` 2.3.0 → 2.4.0
+  (#16), plus `regexp2` 2.5.2 → 2.8.0, `sourcemap` 2.1.3 → 2.1.4, `pprof` and
+  `golang.org/x/text` 0.3.8 → 0.42.0.
+- CI/release pinned tooling at latest: `actions/checkout` v6 → v7.0.1,
+  `actions/setup-go` v6.4.0 → v7.0.0, `actions/upload-artifact` v4 → v7.0.1
+  in the SBOM workflow, `softprops/action-gh-release` v3.0.0 → v3.0.3, gosec
+  v2.22.3 → v2.29.0, syft v1.18.1 → v1.52.0, grype v0.87.0 → v0.119.0.
+- Dependabot now watches `github-actions` as well as `gomod`; without it the
+  action pins never moved and had drifted a full major behind.
 
 ### Security
 - Fix stored XSS: `<script>`/event-handler HTML in served markdown no longer
@@ -30,6 +51,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sidebar, or wikilink-indexed (secreports/report1.md finding 4). Other
   dot-directories (`.obsidian` vaults) remain browsable.
 
+### Fixed
+- Table sorting now compares the whole value instead of the first digits
+  `parseFloat` happened to find: cells are split into text and number
+  segments and compared segment by segment, so `8x.0` sorts before `9.0`,
+  `95%` before `100%`, `A1` before `A10` before `B2`, and `Chapter 3` before
+  `Chapter 10`. Values with `%`/unit/currency attachments (`1.2m`, `$1,234`)
+  and version-like values (`8.9.0` before `8.10.0`) no longer fall into the
+  plain-text branch (#19).
+- Directory listings: the `../` row of a first-level directory now links to
+  `/` instead of the `//` protocol-relative URL, and the sorter matches the
+  row by its `../` label, so the parent row really stays pinned above the
+  sorted rows (#19).
+
+### Added
+- `tablesort_test.go`: the embedded `static/js/tablesort.js` is now executed
+  in a JS engine from `go test`, covering ascending and descending order for
+  every value shape the sorter supports and the `../` row detection.
+- The vendored mermaid bundle is pinned by sha256 in `handler_test.go`, and
+  its `securityLevel:"strict"` bootstrap is asserted. Nothing else tracks that
+  file — dependabot reads `go.mod` and the workflows, syft's SBOM sees only Go
+  modules — so bumping mermaid now fails a test until the recorded version and
+  digest are updated with it.
+
+## [0.3.0] - 2026-08-30
 
 ### Added
 - Client-side table sorting: click any table header (markdown tables and the

@@ -9,3 +9,12 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+
+  # The workflows pin every action by commit SHA, which dependabot understands
+  # and rewrites (SHA + trailing version comment) on each bump. Without this
+  # entry those pins never move: checkout and setup-go had drifted a full major
+  # behind before it was added.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

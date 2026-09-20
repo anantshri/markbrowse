@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -353,6 +355,106 @@ func TestTemplatesIncludeClientScripts(t *testing.T) {
 	}
 	if strings.Contains(dir.String(), `id="toc-toggle"`) {
 		t.Error("dirTmpl should not include the toc-toggle button")
+	}
+}
+
+// TestMermaidBootstrapIsHardened pins the two mermaid.initialize options that
+// are not cosmetic. securityLevel:"strict" is what keeps diagram labels from
+// executing script; it is mermaid's default, but the default is exactly the
+// kind of thing a major version changes, so it stays explicit and asserted.
+// startOnLoad:false matters because mermaid.run() is called by hand once the
+// markdown body is in place.
+func TestMermaidBootstrapIsHardened(t *testing.T) {
+	var md strings.Builder
+	if err := mdTmpl.Execute(&md, pageData{HasMermaid: true}); err != nil {
+		t.Fatalf("mdTmpl execute: %v", err)
+	}
+	out := md.String()
+
+	if !strings.Contains(out, "/__mdview/mermaid.js") {
+		t.Fatal("mdTmpl should load mermaid.js when the page has a diagram")
+	}
+	for _, want := range []string{`securityLevel:"strict"`, "startOnLoad:false", "mermaid.run()"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("mermaid bootstrap missing %s:\n%s", want, out)
+		}
+	}
+
+	// A page with no diagram must not pay for the 5 MB bundle.
+	var plain strings.Builder
+	if err := mdTmpl.Execute(&plain, pageData{}); err != nil {
+		t.Fatalf("mdTmpl execute: %v", err)
+	}
+	if strings.Contains(plain.String(), "/__mdview/mermaid.js") {
+		t.Error("mdTmpl should not load mermaid.js when the page has no diagram")
+	}
+}
+
+// static/js/mermaid.min.js is vendored verbatim from the npm package. Nothing
+// else in the repo tracks it: dependabot only reads go.mod and the workflows,
+// and syft's SBOM only sees Go modules — which is how it sat on 11.15.0 while
+// three minors and a major shipped. These constants are the record, and the
+// test below is what makes a silent swap fail.
+//
+//	npm pack mermaid@12.0.0 && sha256sum package/dist/mermaid.min.js
+const (
+	mermaidVendoredVersion = "12.0.0"
+	mermaidVendoredSHA256  = "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073"
+)
+
+// TestMermaidAssetIsTheVendoredBundle pins the embedded bundle to the exact
+// npm artifact named above. Bumping mermaid is meant to fail this test: update
+// both constants in the same commit as the file, so the version in the tree is
+// always the version someone chose.
+func TestMermaidAssetIsTheVendoredBundle(t *testing.T) {
+	if got := fmt.Sprintf("%x", sha256.Sum256(mermaidJS)); got != mermaidVendoredSHA256 {
+		t.Fatalf("embedded mermaid bundle sha256 = %s, want %s (mermaid %s)",
+			got, mermaidVendoredSHA256, mermaidVendoredVersion)
+	}
+
+	js := string(mermaidJS)
+	// The template loads the bundle as a classic script and then calls into a
+	// global, so the global export and the securityLevel option both have to
+	// survive whatever version is vendored.
+	for _, want := range []string{
+		`globalThis["mermaid"]`,
+		"securityLevel",
+		`version:"` + mermaidVendoredVersion + `"`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("mermaid bundle missing %q", want)
+		}
+	}
+}
+
+func TestServeDirectoryParentRowLink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &fileHandler{root: dir, md: newMarkdownConverter(dir, false)}
+
+	// First-level directory: the parent row must link to the root, never to the
+	// "//" protocol-relative URL that browsers resolve against another host.
+	req := httptest.NewRequest(http.MethodGet, "/sub/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sub status = %d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `<a href="/">../</a>`) {
+		t.Errorf("parent row should link to /, got:\n%s", body)
+	}
+
+	// Deeper directory: the parent row keeps the trailing-slash path.
+	req = httptest.NewRequest(http.MethodGet, "/sub/nested/", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nested status = %d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `<a href="/sub/">../</a>`) {
+		t.Errorf("parent row should link to /sub/, got:\n%s", body)
 	}
 }
 

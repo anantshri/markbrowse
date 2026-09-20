@@ -9,6 +9,266 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-09-20 — Bring every pinned dependency to latest (Go modules, Actions, gosec/syft/grype, mermaid 12)
+
+**Summary:** A full sweep for "latest version" across every kind of pin in the
+repo, not just the ones dependabot was configured to see. The Go module bumps
+were routine; the interesting findings were that three whole classes of
+dependency had no automation watching them at all.
+
+**What was already current:** every *direct* Go module. `goldmark` 1.8.6,
+`goldmark-meta` v1.1.0, `goldmark-gh-alerts`, `mermaid`/`wikilink` v0.6.0 and
+`yaml.v2` v2.4.0 are each the newest release of their current major.
+
+**What was stale, and why nothing caught it:**
+
+| Pin | Was | Now | Watched by dependabot? |
+|---|---|---|---|
+| indirect Go modules | x/text 0.3.8 (2022), regexp2 2.5.2, sourcemap 2.1.3, pprof 2023 | 0.42.0 / 2.8.0 / 2.1.4 / 2026 | yes, but `go get -u ./...` skips test-only deps — it needs `-t` |
+| `actions/checkout` | v6.0.2 (and a v6 pin in sbom.yml) | v7.0.1 | **no** |
+| `actions/setup-go` | v6.4.0 | v7.0.0 | **no** |
+| `actions/upload-artifact` (sbom.yml) | v4 | v7.0.1 | **no** |
+| `softprops/action-gh-release` | v3.0.0 | v3.0.3 | **no** |
+| gosec | v2.22.3 | v2.29.0 | **no** (a `go install` line in a `run:` step) |
+| syft / grype | v1.18.1 / v0.87.0 | v1.52.0 / v0.119.0 | **no** (checksum-pinned downloads) |
+| mermaid bundle | 11.15.0 | 12.0.0 | **no** (a vendored file) |
+
+`.github/dependabot.yml` only declared the `gomod` ecosystem, so every action
+pin was frozen from the day it was written — checkout and setup-go were a full
+major behind. Added a `github-actions` entry; dependabot understands SHA pins
+with a trailing version comment and rewrites both.
+
+**Action major bumps checked for breaking changes before taking them:**
+checkout v7 blocks fork-PR checkout under `pull_request_target`/`workflow_run`
+(this repo triggers on `push` and `pull_request`, unaffected) and moved to
+ESM; setup-go v7 is an ESM migration; upload-artifact v5/v6/v7 are Node 24 and
+ESM moves with `name`/`path` unchanged. All SHAs resolved with
+`git ls-remote refs/tags/<tag>` and recorded with the version in a comment.
+syft/grype checksums came from each release's own `checksums.txt`, which is
+the bump procedure the workflow comment already documents.
+
+**Go toolchain, again:** `go get -u -t ./...` moved the `go` directive 1.25.0
+→ 1.26.0, because `golang.org/x/text@v0.42.0` declares `go 1.26.0`. Worth
+being explicit about the shape of this: x/text is reached only through goja,
+which is a *test-only* dependency, so it is not linked into the release binary
+— but the `go` directive is module-wide, so the release build needs 1.26 too.
+CI and release workflows moved to `go-version: "1.26"` to match. Pinning
+x/text to its last `go 1.25` release would avoid this; not done, because the
+instruction was to be on latest and Go 1.26 is the current release.
+
+**Mermaid 11.15.0 → 12.0.0 (deliberate, user-chosen):** the vendored
+`static/js/mermaid.min.js` was confirmed byte-identical to npm
+`mermaid@11.15.0`'s `dist/mermaid.min.js` (sha256
+`70137e77…`), so the swap is a clean artifact replacement rather than a
+re-bundle. v12 is a breaking major:
+
+- ELK replaces dagre as the default layout engine.
+- `neo` replaces `classic` as the default look; `redux-color` replaces
+  `default` as the theme.
+- Requires ES2024 — Safari 17.4+, current Chrome/Firefox/Edge.
+- Bundle grows 3.2 MB → 5.3 MB (ELK is bundled in).
+
+The choice was between pinning the old rendering (`layout:"dagre"`,
+`look:"classic"`) and adopting v12's defaults; **adopting the new defaults was
+chosen**, so `theme:"default"` was dropped from `mermaid.initialize` in
+`templates.go`. Existing diagrams will visibly re-lay-out and restyle. The
+bundle is still only served on pages that contain a diagram, so the size
+increase does not touch ordinary markdown pages.
+
+`securityLevel:"strict"` was deliberately *kept* — it was added by the
+2026-08-30 raw-HTML hardening, and "mermaid defaults to strict" is exactly the
+assumption a major version invalidates. Verified the v12 bundle still honours
+it (31 occurrences, same `strict`/`antiscript`/`sandbox`/`loose` levels) and
+still installs `globalThis["mermaid"]`, which the classic `<script src>` load
+in the template depends on.
+
+**Tests:** the mermaid bundle was previously untracked by anything — not
+dependabot, not the SBOM (syft sees Go modules and workflow actions here, not
+vendored JS). That invisibility is how it sat three minors and a major behind.
+Added to `handler_test.go`:
+- `mermaidVendoredVersion` / `mermaidVendoredSHA256` constants plus
+  `TestMermaidAssetIsTheVendoredBundle`, which digests the embedded bytes.
+  Bumping mermaid now *fails* until both constants are updated in the same
+  commit — the point being that the version in the tree is always one someone
+  chose.
+- `TestMermaidBootstrapIsHardened`, asserting `securityLevel:"strict"`,
+  `startOnLoad:false` and `mermaid.run()` survive, and that a diagram-free
+  page does not pull the bundle.
+
+**Commands:**
+```
+go list -m -u all
+go get -u -t ./...            # -t: without it, test-only deps are skipped
+go mod tidy
+git ls-remote --tags --refs https://github.com/actions/checkout      # + each action
+git ls-remote https://github.com/actions/checkout refs/tags/v7.0.1   # -> pin SHA
+curl -fsSL .../syft_1.52.0_checksums.txt | grep linux_amd64.tar.gz
+npm registry: mermaid dist-tags -> 12.0.0; tarball dist/mermaid.min.js vendored
+go build ./... && go vet ./... && go test -cover ./...
+aidc-scan
+```
+
+**Verification:**
+- `go build ./...`, `go vet ./...` clean; `go test -cover ./...` pass at 76.1%.
+- Vendored 11.15.0 bundle hashed against the npm tarball to prove the file was
+  unmodified before replacing it.
+- v12 bundle inspected for `globalThis["mermaid"]`, `securityLevel` and the
+  `strict`/`sandbox`/`loose` levels before dropping the theme pin.
+- Live run: `guides/getting-started.md` emits `<pre class="mermaid">`, loads
+  `/__mdview/mermaid.js` (200, `application/javascript`, 5,575,485 bytes) and
+  bootstraps `mermaid.initialize({startOnLoad:false,securityLevel:"strict"})`;
+  `guides/table-sorting.md`, which has no diagram, loads neither.
+- `aidc-scan` clean with the 5 MB bundle in scope.
+
+**Notes / residual risk:**
+- **Mermaid rendering itself is not verified.** There is no browser or node in
+  this container, so "diagrams still draw correctly under ELK/neo" is
+  unproven — only that the bundle loads, exports the global, and keeps the
+  security option. Worth one manual pass over a page with diagrams.
+- `goldmark/v2` (v2.1.5) and `goldmark-meta/v2` (v2.0.2) exist, and the Go
+  version that previously blocked them is no longer a constraint. Still not
+  adoptable: `goldmark-gh-alerts`, `go.abhg.dev/goldmark/mermaid` and
+  `go.abhg.dev/goldmark/wikilink` have no v2 module path (404 / no matching
+  version), and their extenders implement the *v1* `goldmark.Extender`
+  interface, so they cannot register on a v2 `goldmark.Markdown`. Migrating
+  means dropping or forking three extensions — a rewrite, not an upgrade.
+- `gopkg.in/yaml.v2` stays at v2.4.0, which is the last v2 release. Moving to
+  yaml.v3 is not available as a version bump: `markdown.go` consumes
+  `yaml.MapSlice` returned by `goldmark-meta` v1, and that type is v2-only.
+
+---
+
+## 2026-09-20 — Table sorting compares whole values (#19, PR #20); dependabot bumps (#16, #17)
+
+**Summary:** Integrated the three open pull requests. PR #20 (ai-anant) fixes
+issue #19 — table sorting looked at the first number `parseFloat` could find,
+so `9.0` sorted above `8x.0` and any cell with a `%`/unit/symbol attached fell
+through to the text branch. Its diagnosis and its second fix (the `../` row of
+a directory listing linking to `//`) are correct and kept. Its comparison
+strategy was reworked because it regressed letter-prefixed identifiers. PRs
+#17 and #16 are dependabot bumps applied as version bumps rather than branch
+merges, because their `go.mod` base no longer matches this branch.
+
+**Why:** The reporter's own words — *"it seems it still sorts by first number
+only not the full number. so 9.0 will be ahead of 8x.0"* and *"% or m
+interfere"*. Both were reproduced before touching the fix, by running the real
+`static/js/tablesort.js` in a JS engine (no node in the container):
+
+| column | before | expected |
+|---|---|---|
+| `9.0`, `8x.0`, `10.0` | `9.0`, `10.0`, `8x.0` | `8x.0`, `9.0`, `10.0` |
+| `9%`, `100%`, `95%` | `100%`, `9%`, `95%` | `9%`, `95%`, `100%` |
+| `8.10.0`, `8.9.0` | `8.10.0`, `8.9.0` | `8.9.0`, `8.10.0` |
+
+The mechanism in each case: `parseSortValue` matched `^-?[\d.]+$`, so `8x.0`
+and `95%` never matched and became text, and numbers sort before text
+(`va.n && !vb.n => -1`). For `8.10.0` the regex *did* match and
+`parseFloat("8.10.0")` returned `8.1`, which compares below `8.9`.
+
+**What PR #20 got right, and was kept:**
+- The diagnosis and the goal: compare the whole value.
+- The version branch — two or more dots cannot all be decimal points, so the
+  components are compared as separate integers.
+- Requiring an explicit unit on the byte-size branch, so `8.10.0` is not
+  silently truncated by the old `^([\d.]+)\s*(B|KB|...)?$` pattern.
+- `parentPath()`. This is a real second bug and was verified independently:
+  `path.Dir("/sub") + "/"` is `"//"`, so the `../` row of every first-level
+  directory emitted `href="//"` — read by a URL parser as the start of an
+  authority, not as the root path. And because the sorter only pinned rows
+  whose href ended in `"../"`, while the server has always emitted the parent
+  *path*, the "parent row stays pinned" feature had never worked at all.
+  Both halves of that fix are kept unchanged.
+
+**What was changed, and why:**
+- PR #20 dropped every non-numeric character and compared the remaining digit
+  runs (`A1` -> `[1]`). Verified regression: a column of `A1`, `B2`, `A10`,
+  `C3` sorted to `A1`, `B2`, `C3`, `A10` — the letter stopped counting. It
+  also needed a `NUMERIC_NOISE` heuristic ("at most two letters of unit") to
+  keep `video.mp4` and `Chapter 10` in the text branch, which is a guess
+  about intent that breaks at three letters (`1.2 ms` numeric,
+  `800 sec` textual).
+- Replaced with segment comparison: a cell becomes alternating number and
+  text segments (`8x.0` -> `[8, "x.", 0]`, `A10` -> `["a", 10]`) compared in
+  order, number segments before text segments. This fixes #19 identically,
+  keeps `A1` < `A10` < `B2`, additionally sorts `Chapter 3` before
+  `Chapter 10`, and deletes the letter-counting heuristic — `video.mp4`
+  (`["video.mp", 4]`) stays alphabetical because its first segment is text,
+  not because of a rule about word-shaped cells.
+- A bare `B` now requires whitespace before it to count as a byte unit.
+  Pre-existing (the old regex used `\s*` too), but it only became visible
+  once suffixed labels sorted numerically: `3b` was read as three bytes, so
+  a `3a`/`3b`/`3c` column sorted `3b`, `3a`, `3c`. The listing always emits
+  `386 B` with a space; `3b` is far more likely a label. `1.5KB`/`2.0MB`
+  still need no space — multi-letter units are unambiguous.
+- Thousands separators are stripped only between digits (`/(\d),(?=\d)/`)
+  rather than everywhere, so `Smith, John` keeps its comma.
+- Sort keys are computed once per row instead of inside the comparator,
+  which previously re-parsed both cells on every one of the O(n log n)
+  comparisons. This also removes the old `if (!ca || !cb) return 0` branch,
+  a non-transitive comparator for ragged tables.
+
+**Tests:** `tablesort.js` had no automated coverage, and the container has no
+node. Added `github.com/dop251/goja` (pure-Go JS engine) as a test dependency
+and `tablesort_test.go`, which unwraps the script's IIFE, evaluates the body
+in the engine's global scope against the *embedded* `tablesortJS` bytes, and
+asserts both directions for 21 value shapes plus `../` row detection. Run
+against PR #20's version of the file, exactly two cases fail
+(`letter-prefixed identifiers`, `numbered labels sort naturally`), which is
+the intended difference.
+
+**Toolchain:** goja's `go.mod` requires `go 1.25.0` (it moved from 1.20
+straight to 1.25 in June 2026; there is no recent pre-1.25 commit to pin).
+`go.mod` therefore moves to `go 1.25.0` and `ci.yml` / `release.yml` from
+`go-version: "1.24"` to `"1.25"`. Go 1.24 is out of upstream support now that
+1.26 is released, so this is a bump the repo needed regardless.
+
+**Dependency bumps:** `github.com/yuin/goldmark` 1.8.5 -> 1.8.6 (PR #17) —
+`v1.8.5..v1.8.6` is `fix: URLEscape validated the same hex digit twice`,
+`fix: URLEscape dropped a truncated utf8 leading byte`, and
+`fix(extension): fix #571`; all link-handling correctness, no advisory.
+`gopkg.in/yaml.v2` 2.3.0 -> 2.4.0 (PR #16). Applied with `go get` rather than
+by merging the branches: both PRs branch from a `go.mod` that predates the
+Go 1.25 and goja changes, so merging them would conflict on every line they
+touch for no added value.
+
+**Commands:**
+```
+git fetch https://github.com/anantshri/markbrowse 'refs/pull/20/head:pr-20' \
+    'refs/pull/17/head:pr-17' 'refs/pull/16/head:pr-16'
+git checkout -b integrate-prs-20-sep-2026
+git merge --no-ff pr-20                 # conflict in CHANGELOG.md only
+                                        # + semantic conflict: PR #20's new
+                                        # test called newMarkdownConverter(dir),
+                                        # which took a second arg since 0a186d7
+go get github.com/dop251/goja@latest
+go get github.com/yuin/goldmark@v1.8.6 gopkg.in/yaml.v2@v2.4.0
+go mod tidy
+go build ./... && go vet ./... && go test -cover ./...
+aidc-scan
+```
+
+**Verification:**
+- `go test -cover ./...` — ok, 76.1% of statements; `parentPath` 100%.
+- `go test -run TableSort -v` — 21 ordering cases + 7 parent-row cases pass.
+- Swapping the pre-fix `tablesort.js` back in fails the suite; swapping in PR
+  #20's version fails exactly the two cases above. Both re-verified before
+  restoring the fixed file.
+- `go vet ./...` clean. `aidc-scan` clean.
+
+**Notes:**
+- Unit letters are still not interpreted: `1.2m` sorts below `950k` because
+  1.2 < 950. Documented in `testdata/guides/table-sorting.md`; interpreting
+  SI suffixes would need a per-column decision the sorter does not have.
+- `serveDirectory` also builds `CurrentPath: relPath + "/"`, which is `"//"`
+  at the root — the same shape as the `ParentPath` bug. Left alone: it is
+  only compared against *file* node paths in `sidebar.js`, which never end in
+  a slash, so no highlight can be affected.
+- `markdown.go` is not `gofmt`-clean on this branch (an import ordering nit
+  that predates this work, present on `2ecdebf`). Not touched here to keep
+  the diff to the change at hand; CI does not run a format check.
+
+---
+
 ## 2026-08-30 — Bind loopback by default (--listen), harden CI ref handling
 
 **Summary:** The server bound `:port` (all interfaces) with no

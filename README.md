@@ -9,11 +9,11 @@ A minimal markdown file viewer. Point it at any directory and it starts a web se
 - Uses directories' `README.md` or `INDEX.md` as the index page
 - Falls back to a file listing when no index markdown is present
 - Serves non-markdown files as-is (images, PDFs, etc.)
-- [Mermaid](https://mermaid.js.org/) diagram rendering
+- [Mermaid](https://mermaid.js.org/) diagram rendering (mermaid 12, bundled — needs an ES2024 browser: Safari 17.4+, current Chrome/Firefox/Edge)
 - Wiki-style `[[link]]` syntax with file-tree resolution
 - GitHub/Obsidian-style admonition callouts (`> [!NOTE]`, `> [!WARNING]`, etc.)
 - YAML front matter rendered as a GitHub-style metadata table, with `title` used as the page title
-- Client-side table sorting (click column headers; numbers, byte sizes, and timestamps sort naturally)
+- Client-side table sorting (click column headers; numbers, byte sizes, timestamps, `%`/unit values, version-like values, and mixed text/number labels such as `Chapter 10` all sort naturally)
 - Collapsible right-hand table of contents built from the heading hierarchy
 - Custom CSS support to override the built-in stylesheet
 - Breadcrumb navigation on all pages
