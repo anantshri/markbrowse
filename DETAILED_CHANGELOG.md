@@ -9,6 +9,160 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-09-20 — Security review findings fixed (pre-0.4.0)
+
+**Summary:** a security review of the codebase before tagging 0.4.0 found three
+issues. All three are fixed and folded into the 0.4.0 entry rather than left
+for a follow-up, since the release had not been cut.
+
+**What held up,** because it is worth recording that these were exercised
+rather than assumed: path traversal (`/../etc/passwd`, `..%2f`, `%2e%2e/`,
+`....//` — all 404), symlink escape (file and directory, both 404, and
+`resolveContained` opens the *resolved* path so the usual TOCTOU window is
+closed), `html/template` context escaping, wikilink `href` escaping
+(`[[notes#" onmouseover="alert(1)]]` percent-encodes the quote to `%22` inside
+the attribute and `&quot;`-escapes the text — no breakout), heading-ID
+sanitisation, and the absence of `innerHTML`/`eval`/`document.write` anywhere
+in the first-party JS.
+
+### 1. Non-markdown files executed in the viewer's origin
+
+markbrowse omits raw HTML from markdown and filters dangerous URL schemes
+precisely because vault content may be untrusted. That control was bypassable
+by putting the payload in a file *beside* the markdown:
+
+```
+/evil.html     Content-Type: text/html; charset=utf-8
+/evil.svg      Content-Type: image/svg+xml
+/noextension   Content-Type: text/html; charset=utf-8    <- content-sniffed
+```
+
+The whole chain was verified end to end:
+
+```
+README.md renders  <a href="report.html">audit report</a>   (raw HTML OFF)
+click              -> 200 text/html, script runs
+script             -> GET /__mdview/tree.json   enumerate every file
+                   -> GET /private/creds.md     secret-api-key=AKIA...
+                   -> exfiltrate
+```
+
+No auth and same origin, so one click turned "view an untrusted vault" into
+"read and exfiltrate the served tree". Navigation was required — an
+`<img src="evil.svg">` does not execute, and with raw HTML off markdown cannot
+iframe it — but `[audit report](report.html)` is an entirely natural link to
+follow.
+
+Fixed by resolving the content type *before* writing the response (rather than
+letting `http.ServeContent` sniff it, so the type defended against is the type
+sent) and attaching `Content-Security-Policy: sandbox` when that type is one a
+browser will execute: `text/html`, `application/xhtml+xml`, `image/svg+xml`,
+and XML (for XSLT). `sandbox` with no `allow-*` tokens puts the response in an
+opaque origin — no script, no same-origin reads. Images, PDFs and downloads
+are untouched, which is why the fix is type-scoped rather than blanket.
+
+### 2. VCS blocking was case-sensitive
+
+```
+hasVCSSegment("/.git/config") = true
+hasVCSSegment("/.GIT/config") = false
+```
+
+`isVCSName` did an exact map lookup. On a case-insensitive filesystem — APFS
+by default on macOS, and NTFS — `/.GIT/config` opens the real `.git/config`,
+so the block held only on Linux. Demonstrated by serving a directory literally
+named `.GIT`:
+
+```
+/.GIT/config  -> 200
+body: [remote]   url = https://user:TOKEN@github.com/x/y
+```
+
+`.git/config` routinely carries credentials in the remote URL, and `.git/`
+exposes full history. It was also quiet: the tree walk checks the on-disk name
+(`.git`) and correctly hid it from the sidebar, so only the direct URL was
+affected.
+
+Matching is now case-folded, and additionally covers two Windows behaviours:
+trailing dots and spaces are ignored by the OS (`.git.` opens `.git`), and 8.3
+aliases (`GIT~1`) reach the same directory. Near-misses stay servable —
+`.gitignore`, `.github`, `git~1.md` are all still fine, and tested.
+
+### 3. No security headers
+
+None of `X-Content-Type-Options`, `Content-Security-Policy` or
+`Referrer-Policy` were set on any response. `nosniff` is the one that matters
+most here: it is what stops the extensionless-file case in finding 1.
+
+Now on every response, including errors and blocked paths. Rendered pages
+additionally get a policy with a per-request nonce:
+
+```
+default-src 'none'; script-src 'self' 'nonce-<random>'; style-src 'self' 'unsafe-inline';
+img-src * data: blob:; font-src * data:; connect-src 'self';
+base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+```
+
+Two deliberate loosenings, both load-bearing:
+
+- **`style-src 'unsafe-inline'`.** The stylesheet is inlined into the page, and
+  mermaid injects `<style>` elements at render time. A nonce-only style policy
+  would silently stop diagrams rendering.
+- **`img-src *` / `font-src *`.** Documents legitimately reference remote
+  images, and neither type can execute. `Referrer-Policy: no-referrer` limits
+  what those requests disclose.
+
+`connect-src 'self'` is the meaningful restriction: a script that did slip
+through cannot exfiltrate over `fetch`.
+
+### Also fixed
+
+Markdown over 32 MiB is refused with `413`. Rendering is linear in file size in
+both CPU and memory and happens per request, so an enormous document was a
+cheap way to exhaust the process — which matters once `--listen` puts the
+server beyond loopback. The check uses the `Stat` already performed, so it
+costs nothing, and no real document approaches the limit.
+
+The README gains a Security section describing the posture and naming
+`--raw-html` and `--css` as the two flags that deliberately turn protections
+off. `--css` is injected verbatim and CSS can make outbound requests via
+`url(...)`, so the stylesheet is trusted code.
+
+**Verification:**
+
+```
+FINDING 1  /report.html   CSP: sandbox   nosniff
+           /evil.svg      CSP: sandbox   nosniff
+           /noextension   CSP: sandbox   nosniff
+           /pic.png       (no CSP)       nosniff      <- images unaffected
+FINDING 2  /.git/config /.GIT/config /.Git/config /GIT~1/config  -> all 404
+FINDING 3  nosniff + no-referrer + CSP present on rendered pages
+           CSP nonce == inline <script nonce="...">, and differs per request
+SIZE CAP   32.4 MB .md -> 413,  normal .md -> 200
+```
+
+`security_test.go` covers all of it: base headers across nine response kinds
+(markdown, index, listing, raw file, sniffed file, embedded asset, tree API,
+404, blocked path), the sandbox decision for seven content types, that the
+content type is decided rather than sniffed, nonce freshness across five
+requests, that the mermaid bootstrap carries the matching nonce — the test
+that would catch a CSP which silently breaks diagrams — and the size cap.
+`TestIsVCSName` and `TestHasVCSSegment` gained the case, trailing-dot and 8.3
+variants. Coverage 77.5% -> 78.3%.
+
+**Notes:**
+- The page CSP is the one change not verifiable from here: there is no browser
+  in this container, so "mermaid still renders under this policy" is argued
+  from the policy text (`style-src` keeps `'unsafe-inline'`) and asserted at
+  the nonce level, not observed. Worth one look at a page with a diagram, with
+  the browser console open for CSP violations.
+- Not changed: the YAML parse error still emits a fragment of document content
+  as an HTML comment. It can no longer close the comment early, and the
+  behaviour is deliberate — it is how a broken front matter block explains
+  itself.
+
+---
+
 ## 2026-09-20 — Sidebar quick filter and lazy rendering (#18)
 
 **Summary:** Issue #18 asked for two things: a quick filter above the file tree

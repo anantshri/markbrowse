@@ -107,6 +107,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sorted rows (#19).
 
 ### Security
+- **Non-markdown files can no longer execute in the viewer's origin.** A
+  `.html` or `.svg` file sitting beside the markdown was served as
+  `text/html` / `image/svg+xml`, and a file with no extension whose contents
+  began with markup was content-sniffed to `text/html`. Following an ordinary
+  markdown link to one ran its script with same-origin access to everything
+  the server exposes — no auth, so the whole served tree could be enumerated
+  via `/__mdview/tree.json`, read, and exfiltrated. That defeated the point of
+  omitting raw HTML from markdown: the payload simply moved into a sibling
+  file. Such responses now carry `Content-Security-Policy: sandbox`, which
+  puts them in an opaque origin. Images, PDFs and downloads are unaffected.
+- **`.git` blocking now holds on macOS and Windows.** The match was exact, so
+  `/.GIT/config` was not recognised — and on a case-insensitive filesystem
+  (APFS, NTFS) the OS resolves it to the real `.git/config`, which commonly
+  contains credentials in the remote URL. Matching is now case-folded, and
+  also covers Windows trailing-dot (`.git.`) and 8.3 (`GIT~1`) aliases.
+- **Security headers on every response**: `X-Content-Type-Options: nosniff`
+  (which is what stops the content-sniffing case above) and
+  `Referrer-Policy: no-referrer`. Rendered pages additionally carry a
+  `Content-Security-Policy` with a per-request nonce for the inline mermaid
+  bootstrap, `default-src 'none'`, and `connect-src 'self'` so an injected
+  script cannot exfiltrate over `fetch`.
+- Markdown larger than 32 MiB is refused with `413` rather than read and
+  rendered. Rendering is linear in file size and happens per request, so an
+  enormous document was a cheap way to exhaust the process once `--listen`
+  put the server beyond loopback.
 - The front matter YAML parse error, which is emitted as an HTML comment when
   a metadata block fails to parse, can no longer close that comment early:
   `-->` is escaped out of the message. Error text is partly derived from

@@ -96,6 +96,33 @@ do this for content you trust, since it re-enables both.
   --version     Print version and exit
 ```
 
+## Security
+
+markbrowse serves a directory over unauthenticated HTTP, so the defaults
+assume the content may not be trustworthy:
+
+- **Binds `127.0.0.1`.** Pass `--listen 0.0.0.0` to expose it deliberately.
+- **Raw HTML in markdown is omitted**, and `javascript:`/`vbscript:`/`file:`/
+  `data:` link targets are filtered.
+- **Non-markdown files that a browser would execute** — `.html`, `.svg`, XML,
+  and anything that sniffs to HTML — are served with
+  `Content-Security-Policy: sandbox`, so they cannot run script or read the
+  rest of the served tree. Images, PDFs and downloads are unaffected.
+- **Rendered pages carry a CSP** with a per-request nonce for the one inline
+  script. `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`
+  are set on every response.
+- **`.git`, `.hg`, `.svn` and `.bzr` are never served**, matched
+  case-insensitively so the block holds on macOS and Windows.
+- **Symlinks may not escape** the served directory, and markdown larger than
+  32 MiB is refused rather than rendered.
+
+Two flags deliberately turn protections off, for content you control:
+
+- `--raw-html` renders embedded HTML unescaped and stops filtering dangerous
+  URL schemes.
+- `--css` injects the given file into every page verbatim. CSS can make
+  outbound requests (`url(...)`), so treat the stylesheet as trusted code.
+
 ## Dependencies
 
 Two modules at runtime:

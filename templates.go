@@ -11,6 +11,7 @@ type breadcrumb struct {
 
 type pageData struct {
 	Title       string
+	Nonce       string
 	CSS         template.CSS
 	Body        template.HTML
 	Breadcrumbs []breadcrumb
@@ -28,6 +29,7 @@ type entryInfo struct {
 
 type dirData struct {
 	Path        string
+	Nonce       string
 	CSS         template.CSS
 	HasParent   bool
 	ParentPath  string
@@ -65,7 +67,7 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 {{.Body}}
 </article>
 {{if .HasMermaid}}<script src="/__mdview/mermaid.js"></script>
-<script>mermaid.initialize({startOnLoad:false,securityLevel:"strict"});mermaid.run();</script>{{end}}
+<script nonce="{{.Nonce}}">mermaid.initialize({startOnLoad:false,securityLevel:"strict"});mermaid.run();</script>{{end}}
 </div>
 </main>
 <nav class="mdview-toc" id="toc-root" aria-label="Table of contents"></nav>

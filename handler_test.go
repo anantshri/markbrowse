@@ -739,12 +739,32 @@ func TestUnderRoot(t *testing.T) {
 }
 
 func TestIsVCSName(t *testing.T) {
-	for _, name := range []string{".git", ".hg", ".svn", ".bzr"} {
+	blocked := []string{
+		".git", ".hg", ".svn", ".bzr",
+
+		// Case variants. On APFS and NTFS the filesystem resolves these to the
+		// real directory, so an exact-match block would only hold on Linux.
+		".GIT", ".Git", ".gIt", ".HG", ".SVN", ".BZR",
+
+		// Windows ignores trailing dots and spaces, so ".git." opens ".git".
+		".git.", ".git ", ".GIT..", ".git. ",
+
+		// Windows 8.3 aliases of the same directories.
+		"git~1", "GIT~1", "git~2", "hg~1", "svn~1", "bzr~1",
+	}
+	for _, name := range blocked {
 		if !isVCSName(name) {
 			t.Errorf("isVCSName(%q) = false, want true", name)
 		}
 	}
-	for _, name := range []string{"git", ".gitignore", ".github", ".gitx", ".obsidian", ".hidden", "notes.md", ""} {
+
+	allowed := []string{
+		"git", ".gitignore", ".github", ".gitx", ".obsidian", ".hidden",
+		"notes.md", "",
+		// Near-misses that must stay servable.
+		".GITIGNORE", ".GitHub", "git~1.md", "gitx~1", "~1", "git~",
+	}
+	for _, name := range allowed {
 		if isVCSName(name) {
 			t.Errorf("isVCSName(%q) = true, want false", name)
 		}
@@ -760,7 +780,16 @@ func TestHasVCSSegment(t *testing.T) {
 			t.Errorf("hasVCSSegment(%q) = false, want true", p)
 		}
 	}
-	for _, p := range []string{"/", "/notes.md", "/.gitignore", "/.github/workflows/ci.yml", "/.obsidian/x.md"} {
+	// Case and Windows-alias variants of the same paths.
+	for _, p := range []string{
+		"/.GIT/config", "/.Git/config", "/foo/.GIT/config",
+		"/.git./config", "/GIT~1/config", "/foo/git~1/objects",
+	} {
+		if !hasVCSSegment(p) {
+			t.Errorf("hasVCSSegment(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"/", "/notes.md", "/.gitignore", "/.github/workflows/ci.yml", "/.obsidian/x.md", "/.GITIGNORE"} {
 		if hasVCSSegment(p) {
 			t.Errorf("hasVCSSegment(%q) = true, want false", p)
 		}

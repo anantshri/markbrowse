@@ -1,16 +1,21 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -36,8 +41,20 @@ type fileHandler struct {
 // and never contain markdown the viewer wants.
 var vcsDirNames = map[string]bool{".git": true, ".hg": true, ".svn": true, ".bzr": true}
 
+// vcsShortName matches the Windows 8.3 alias of a VCS directory: ".git" is
+// also reachable as "GIT~1".
+var vcsShortName = regexp.MustCompile(`^(git|hg|svn|bzr)~[0-9]+$`)
+
+// isVCSName reports whether a path segment names a VCS metadata directory.
+//
+// The comparison is deliberately loose, because the filesystem is. On APFS
+// (macOS default) and NTFS, "/.GIT/config" opens the real ".git/config", so an
+// exact match would block the path only on Linux. Windows additionally ignores
+// trailing dots and spaces (".git." is ".git") and exposes 8.3 aliases.
 func isVCSName(name string) bool {
-	return vcsDirNames[name]
+	n := strings.ToLower(name)
+	n = strings.TrimRight(n, ". ")
+	return vcsDirNames[n] || vcsShortName.MatchString(n)
 }
 
 // hasVCSSegment reports whether any "/"-separated segment of a URL path is a
@@ -104,7 +121,19 @@ func (h *fileHandler) resolveContained(fsPath string) (string, bool) {
 	return resolved, true
 }
 
+// setBaseSecurityHeaders applies the headers every response gets, whatever it
+// is. nosniff is the important one: without it a file with no extension whose
+// contents begin with markup is sniffed to text/html and executed.
+func setBaseSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Nothing here needs to tell a third party which document was open, and
+	// markdown may legitimately reference remote images.
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
 func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	setBaseSecurityHeaders(w)
+
 	relPath := path.Clean("/" + r.URL.Path)
 	fsPath := filepath.Join(h.root, relPath[1:])
 
@@ -194,7 +223,93 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+
+	// Resolve the type here instead of letting ServeContent do it, so the type
+	// we defend against is exactly the type we send.
+	ctype, err := contentTypeOf(info.Name(), f)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", ctype)
+	if isExecutableType(ctype) {
+		// A .html or .svg sitting beside the markdown would otherwise run in
+		// the viewer's origin, with read access to everything else the server
+		// exposes — which is the whole served tree, since there is no auth.
+		// That defeats the point of omitting raw HTML from markdown: the
+		// payload just moves into a sibling file that a link points at.
+		//
+		// "sandbox" with no allow-* tokens puts the response in an opaque
+		// origin: no scripts, no same-origin reads. Images and PDFs are not
+		// affected because they are not executable types.
+		w.Header().Set("Content-Security-Policy", "sandbox")
+	}
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+// contentTypeOf determines how a non-markdown file will be served: by
+// extension when that is known, otherwise by sniffing, exactly as
+// http.ServeContent would. The reader is rewound before returning.
+func contentTypeOf(name string, f io.ReadSeeker) (string, error) {
+	if ctype := mime.TypeByExtension(filepath.Ext(name)); ctype != "" {
+		return ctype, nil
+	}
+	var head [512]byte
+	n, err := io.ReadFull(f, head[:])
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return "", err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	return http.DetectContentType(head[:n]), nil
+}
+
+// isExecutableType reports whether a browser will run script from a document
+// of this type when it is navigated to directly.
+func isExecutableType(ctype string) bool {
+	base, _, _ := strings.Cut(ctype, ";")
+	switch strings.ToLower(strings.TrimSpace(base)) {
+	case "text/html", "application/xhtml+xml", "image/svg+xml",
+		"application/xml", "text/xml":
+		// XML is included for XSLT, which can script.
+		return true
+	}
+	return false
+}
+
+// pageCSP is the policy for markdown and directory-listing pages, which are
+// the documents markbrowse renders itself.
+//
+// script-src carries a per-request nonce for the one inline script (the mermaid
+// bootstrap); 'self' covers the embedded /__mdview/*.js. connect-src 'self'
+// stops any script that does slip through from exfiltrating over fetch.
+//
+// style-src keeps 'unsafe-inline' on purpose: the stylesheet is inlined into
+// the page, and mermaid injects <style> elements at render time, which a
+// nonce-only policy would block. img-src and font-src stay permissive because
+// documents legitimately reference remote images and neither can execute.
+func pageCSP(nonce string) string {
+	return "default-src 'none'; " +
+		"script-src 'self' 'nonce-" + nonce + "'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src * data: blob:; " +
+		"font-src * data:; " +
+		"connect-src 'self'; " +
+		"base-uri 'none'; " +
+		"form-action 'none'; " +
+		"frame-ancestors 'none'"
+}
+
+// newNonce returns a fresh CSP nonce. A failure to read the system CSPRNG is
+// not recoverable into "carry on without a nonce": that would silently drop
+// the inline script and break the page, so it is reported to the caller.
+func newNonce() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(b[:]), nil
 }
 
 func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsPath, relPath string) {
@@ -257,8 +372,15 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 		})
 	}
 
+	nonce, err := newNonce()
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	data := dirData{
 		Path:       relPath,
+		Nonce:      nonce,
 		CSS:        h.css(),
 		HasParent:  relPath != "/",
 		ParentPath: parentPath(relPath),
@@ -269,6 +391,7 @@ func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, fsP
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", pageCSP(nonce))
 	if err := dirTmpl.Execute(w, data); err != nil {
 		log.Printf("dir template error: %v", err)
 	}
@@ -289,6 +412,16 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 			return
 		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Rendering is linear in file size in both CPU and memory and happens per
+	// request, so an enormous document is a cheap way to exhaust the process.
+	// That only really matters once --listen puts the server beyond loopback,
+	// but the check costs nothing: the Stat above already has the size, and no
+	// real document comes close to the limit.
+	if info.Size() > maxMarkdownBytes {
+		http.Error(w, "markdown file too large to render", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -330,8 +463,15 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 		}
 	}
 
+	nonce, err := newNonce()
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	data := pageData{
 		Title: title,
+		Nonce: nonce,
 		CSS:   h.css(),
 		// #nosec G203 -- goldmark output with raw HTML omitted and dangerous
 		// URLs filtered (unless --raw-html opts back in); template.HTML is
@@ -345,6 +485,7 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, fsPa
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", pageCSP(nonce))
 	w.Header().Set("ETag", etag)
 	if err := mdTmpl.Execute(w, data); err != nil {
 		log.Printf("md template error: %v", err)
@@ -423,6 +564,9 @@ type treeEntry struct {
 	IsDir    bool        `json:"isDir,omitempty"`
 	Children []treeEntry `json:"children,omitempty"`
 }
+
+// maxMarkdownBytes caps what serveMarkdown will read and render.
+const maxMarkdownBytes = 32 << 20 // 32 MiB
 
 // treeCacheTTL bounds how long the sidebar tree stays cached. The tree can
 // change as files are added/removed on disk, so it is rebuilt after this
