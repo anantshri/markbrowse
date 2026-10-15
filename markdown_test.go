@@ -24,7 +24,7 @@ func TestMarkdownConvert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := md.convert([]byte(tt.input))
+			got, _, err := md.convert([]byte(tt.input))
 			if err != nil {
 				t.Fatalf("convert error: %v", err)
 			}
@@ -43,7 +43,7 @@ func TestWikilinkResolution(t *testing.T) {
 
 	md := newMarkdownConverter(dir, false)
 
-	got, err := md.convert([]byte("see [[target]] for info"))
+	got, _, err := md.convert([]byte("see [[target]] for info"))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestWikilinkResolution(t *testing.T) {
 		t.Errorf("wikilink: got %q, want to contain /target.md", got)
 	}
 
-	got2, err := md.convert([]byte("see [[deep]] for info"))
+	got2, _, err := md.convert([]byte("see [[deep]] for info"))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestBrokenWikilink(t *testing.T) {
 	dir := t.TempDir()
 	md := newMarkdownConverter(dir, false)
 
-	got, err := md.convert([]byte("see [[nonexistent]] for info"))
+	got, _, err := md.convert([]byte("see [[nonexistent]] for info"))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestFrontMatterRenderedAsTable(t *testing.T) {
 	md := newMarkdownConverter(dir, false)
 
 	src := "---\ntitle: Case Assignment Memo\nclassification: Internal Use Only\ncase_id: BBT-2026-001\n---\n\n# ByteBrew\n\nBody text."
-	got, err := md.convert([]byte(src))
+	got, _, err := md.convert([]byte(src))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestNoFrontMatterNoTable(t *testing.T) {
 	dir := t.TempDir()
 	md := newMarkdownConverter(dir, false)
 
-	got, err := md.convert([]byte("# Just a heading\n\nText."))
+	got, _, err := md.convert([]byte("# Just a heading\n\nText."))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestFrontMatterValueTypes(t *testing.T) {
 	md := newMarkdownConverter(dir, false)
 
 	src := "---\ndraft: false\ncount: 42\ntags:\n  - one\n  - two\n---\n\n# H\n"
-	got, err := md.convert([]byte(src))
+	got, _, err := md.convert([]byte(src))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestFrontMatterHTMLEscaping(t *testing.T) {
 	md := newMarkdownConverter(dir, false)
 
 	src := "---\ntitle: \"<script>alert(1)</script>\"\n---\n\n# H\n"
-	got, err := md.convert([]byte(src))
+	got, _, err := md.convert([]byte(src))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -164,18 +164,28 @@ func TestFrontMatterHTMLEscaping(t *testing.T) {
 	}
 }
 
+// TestMetaTitle: the front matter title is now reported by the render pass
+// itself rather than by a second parse, so it is asserted through convert.
 func TestMetaTitle(t *testing.T) {
 	dir := t.TempDir()
 	md := newMarkdownConverter(dir, false)
 
-	if got := md.metaTitleOf([]byte("---\ntitle: Hello World\n---\n\n# H")); got != "Hello World" {
-		t.Errorf("metaTitleOf = %q, want Hello World", got)
-	}
-	if got := md.metaTitleOf([]byte("---\nauthor: x\n---\n\n# H")); got != "" {
-		t.Errorf("metaTitleOf without title = %q, want empty", got)
-	}
-	if got := md.metaTitleOf([]byte("# No front matter")); got != "" {
-		t.Errorf("metaTitleOf without front matter = %q, want empty", got)
+	for _, tt := range []struct {
+		name, src, want string
+	}{
+		{"front matter title", "---\ntitle: Hello World\n---\n\n# H", "Hello World"},
+		{"front matter without title", "---\nauthor: x\n---\n\n# H", ""},
+		{"no front matter", "# No front matter", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got, err := md.convert([]byte(tt.src))
+			if err != nil {
+				t.Fatalf("convert: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("title = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -189,7 +199,7 @@ func TestWikilinkResolvesInDotDirs(t *testing.T) {
 	}
 
 	md := newMarkdownConverter(dir, false)
-	got, err := md.convert([]byte("see [[hidden]]"))
+	got, _, err := md.convert([]byte("see [[hidden]]"))
 	if err != nil {
 		t.Fatalf("convert error: %v", err)
 	}
@@ -217,7 +227,7 @@ func TestRawHTMLSuppressedByDefault(t *testing.T) {
 		"<div onclick=\"alert(3)\">hi</div>",
 	}
 	for _, in := range inputs {
-		got, err := md.convert([]byte(in))
+		got, _, err := md.convert([]byte(in))
 		if err != nil {
 			t.Fatalf("convert(%q): %v", in, err)
 		}
@@ -244,7 +254,7 @@ func TestDangerousURLsNeutralizedByDefault(t *testing.T) {
 		"![x](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
 	}
 	for _, in := range inputs {
-		got, err := md.convert([]byte(in))
+		got, _, err := md.convert([]byte(in))
 		if err != nil {
 			t.Fatalf("convert(%q): %v", in, err)
 		}
@@ -263,7 +273,7 @@ func TestSafeDataURLsStillRender(t *testing.T) {
 	// goldmark's IsDangerousURL deliberately allows the image data-URL subset;
 	// this test documents that boundary so a future dep bump that changes it
 	// gets noticed instead of silently breaking inline images.
-	got, err := md.convert([]byte("![dot](data:image/png;base64,iVBORw0KGgo=)"))
+	got, _, err := md.convert([]byte("![dot](data:image/png;base64,iVBORw0KGgo=)"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +295,7 @@ func TestSafeURLsUnaffected(t *testing.T) {
 		"![x](/img.png)":           `src="/img.png"`,
 	}
 	for in, want := range inputs {
-		got, err := md.convert([]byte(in))
+		got, _, err := md.convert([]byte(in))
 		if err != nil {
 			t.Fatalf("convert(%q): %v", in, err)
 		}
@@ -301,7 +311,7 @@ func TestAutolinkDangerousSchemeFiltered(t *testing.T) {
 
 	// Autolinks go through a separate gate (html.go renderAutoLink), so cover
 	// them explicitly.
-	got, err := md.convert([]byte("<javascript:alert(1)>"))
+	got, _, err := md.convert([]byte("<javascript:alert(1)>"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +324,7 @@ func TestRawHTMLOptIn(t *testing.T) {
 	dir := t.TempDir()
 	md := newMarkdownConverter(dir, true)
 
-	got, err := md.convert([]byte("<b>bold</b>"))
+	got, _, err := md.convert([]byte("<b>bold</b>"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +338,7 @@ func TestInlineHTMLTextPreserved(t *testing.T) {
 	md := newMarkdownConverter(dir, false)
 
 	// Suppressed tags must not eat the text between them.
-	got, err := md.convert([]byte("<b>bold</b>"))
+	got, _, err := md.convert([]byte("<b>bold</b>"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +354,7 @@ func TestGFMFeaturesSurviveWithoutUnsafe(t *testing.T) {
 	dir := t.TempDir()
 	md := newMarkdownConverter(dir, false)
 
-	got, err := md.convert([]byte("> [!NOTE]\n> hi\n\n```mermaid\ngraph TD; A-->B;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- [ ] task\n\n~~gone~~\n"))
+	got, _, err := md.convert([]byte("> [!NOTE]\n> hi\n\n```mermaid\ngraph TD; A-->B;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- [ ] task\n\n~~gone~~\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

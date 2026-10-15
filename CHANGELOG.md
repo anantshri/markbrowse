@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Sidebar folders could not be opened.** A folder row was a single button
+  that only expanded the folder, so a directory's own page was reachable from
+  the tree only by editing the URL — unlike a file, a folder had no link. Each
+  folder row is now a disclosure toggle plus a link: click the arrow to expand,
+  the name to navigate. Both halves keep working independently, and the toggle
+  still labels itself for screen readers.
+- **The `<h1>` page title never applied to documents with front matter.** A
+  front matter table is prepended to the rendered body, so the previous
+  `strings.HasPrefix(body, "<h1")` test could not match whenever front matter
+  was present, and the page silently fell back to its file name. The first
+  `<h1>` is now found anywhere in the body, and the heading's inline markup is
+  stripped, so a heading containing inline code titles as its text.
+
+### Changed
+- **Markdown documents are parsed once per request.** The front matter title
+  was read by a second method that re-parsed the whole document to reach
+  metadata the render pass already had in hand. The title now comes back from
+  that same parse.
+- Directory listings resolve symlinks for at most the one index candidate that
+  exists, rather than resolving all four candidate names on every request.
+
 ## [0.4.0] - 2026-09-20
 
 ### Added

@@ -9,6 +9,97 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-10-16 — Parse once per request, navigable sidebar folders, fewer symlink walks
+
+**Summary:** Three waste-or-correctness findings from a whole-code review of
+v0.4.0. Every markdown request parsed its document twice; a sidebar folder could
+be expanded but never opened; every directory request resolved up to four
+symlink paths that mostly did not exist. Behaviour is unchanged in every other
+respect.
+
+**The double parse.** `serveMarkdown` called `h.md.convert(source)` to render
+and then `h.md.metaTitleOf(source)` for the front matter title. `metaTitleOf`
+built a fresh `parser.NewContext()`, re-parsed the document, and read the same
+`frontmatter.Items(ctx)` the render pass had already produced. Since goldmark v2
+separates parse from render, the metadata was sitting in the context all along,
+and the second parse cost a full document parse on every page view. `convert`
+now returns `(body, metaTitle, error)` out of the single parse and
+`metaTitleOf` is gone.
+
+**The `<h1>` title that never applied.** The title logic was:
+
+```go
+title := filepath.Base(fileName)
+if t := h.md.metaTitleOf(source); t != "" {
+	title = t
+} else if strings.HasPrefix(body, "<h1") {
+	start := strings.Index(body, ">")
+	end := strings.Index(body, "</h1>")
+	if start != -1 && end != -1 && end > start {
+		title = strings.TrimSpace(body[start+1 : end])
+	}
+}
+```
+
+`convert` prepends the front matter table to `body`, so every document with
+front matter starts with `<table class="meta-table">` — the prefix test was
+false for precisely those documents. A document with front matter but no
+`title` key therefore showed its **file name** in the title bar even with a
+perfectly good `# Heading` on the page. The slice was wrong too: for
+`# A `x``, `Index(">")` lands inside `<h1 id="a-x">` and `Index("</h1>")` at the
+close, so `A <code>x</code>` was taken whole.
+
+`docTitle` replaces it: front matter title wins, else the first `<h1>` found
+anywhere in the body (`h1Pattern`), with inner tags removed (`tagPattern`) and
+entities decoded, else the file name. Five cases in `title_test.go` drive it
+through the real handler and read the decoded `<title>`.
+
+**The unreachable folder.** `folderRow` in `static/js/sidebar.js` created one
+`<button class="tree-folder">` whose only handler toggled the children, and no
+anchor — while `fileRow` created a real `<a href>`. Files were navigable from
+the tree; directories were not. One element cannot both expand a folder and
+navigate to it, so the row is now two controls: `.tree-folder-toggle` (the
+arrow, carrying `aria-expanded` and an `Expand <name>` / `Collapse <name>`
+label) and `.tree-folder-link` (the name, linking to the folder's path). The
+CSS moved from styling the button to styling the row and its two children.
+
+`sidebar_test.go`'s `clickFolder` helper looked for an element whose class
+merely *contained* `tree-folder`, so it matched the new row wrapper and clicked
+the wrapper — which has no handler. It now matches the wrapper exactly and
+fires the click at `firstChild` (the toggle). A `folderLinks` helper was added
+to read `href`s out of the shim so `TestSidebarFoldersAreNavigable` can assert
+the link exists as well as that the toggle still expands.
+
+**The four symlink walks.** `serveDirectory` tried four index names and called
+`h.resolveContained(indexPath)` — a `filepath.EvalSymlinks`, which lstats every
+path component — *before* checking whether the candidate existed as a file. At
+most one of the four can ever matter, so the stat now runs first and the
+resolution only for a candidate that exists. The decision is identical, reached
+after the cheap test.
+
+**Explicitly not changed.** `resolveContained` in `ServeHTTP` runs on every
+request and an `Lstat`-first guard looked like the obvious saving. It is wrong:
+a request for `/link/secret.md` whose *parent* component `link` is a symlink to
+`.git` is lexically clean and not a symlink at the final component, so only the
+full resolution reveals the target. The VCS policy needs the whole-path answer;
+only the index-candidate loop could be reordered without weakening it.
+
+**Evidence.** `gosec ./...`: 9 files / 2610 lines → 0 issues. `semgrep --config
+auto` over Go and JS (mermaid bundle excluded): 283 rules on 12 files → 0
+findings. `gitleaks detect`: 51 commits, 1.28 MB → no leaks. `go test -cover
+./...`: overall 84.0%, `docTitle` 100.0%, `convert` 92.3%. The mechanical part
+of this change updated 20 `convert` call sites across `markdown_test.go`,
+`golden_test.go` and `bench_test.go`; the first script asserted the total
+against a single file, aborted before writing it, and was re-run with per-file
+counts.
+
+**Notes.** The sidebar change is verified at the same level as the existing
+lazy-render tests — the real `sidebar.js` driven by goja against a DOM shim -
+rather than in a browser. `docs/security.md`, referenced by the SBOM workflow
+but absent from the tree, and the remaining review findings are the P3 batch.
+
+---
+
 ## 2026-09-20 — os.Root containment, from GitHub code scanning on PR #21
 
 **Summary:** CodeQL (`go/path-injection`, "This path depends on a

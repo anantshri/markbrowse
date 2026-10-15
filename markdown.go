@@ -77,7 +77,13 @@ func newMarkdownConverter(rootDir string, allowRawHTML bool) *markdownConverter 
 	return &markdownConverter{parser: p, renderer: ghtml.New(rendererOpts...)}
 }
 
-func (m *markdownConverter) convert(source []byte) (string, error) {
+// convert renders source and reports the document's front matter title, if it
+// has one.
+//
+// Both come out of a single parse. The title used to be read by a second
+// method that parsed the whole document again just to reach the same metadata,
+// which doubled the parse cost of every markdown request.
+func (m *markdownConverter) convert(source []byte) (string, string, error) {
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufPool.Put(buf)
@@ -85,17 +91,19 @@ func (m *markdownConverter) convert(source []byte) (string, error) {
 	ctx := parser.NewContext()
 	doc := m.parser.Parse(source, parser.WithContext(ctx))
 	if err := m.renderer.Render(buf, source, doc); err != nil {
-		return "", err
+		return "", "", err
 	}
 	body := buf.String()
 
-	// Prepend a GitHub-style table for YAML front matter, if any. The items
-	// form preserves the order keys appear in the document.
-	table := renderMetaTable(frontmatter.Items(ctx))
+	// The items form preserves the order keys appear in the document.
+	items := frontmatter.Items(ctx)
+
+	// Prepend a GitHub-style table for YAML front matter, if any.
+	table := renderMetaTable(items)
 	if table != "" {
 		body = table + "\n" + body
 	}
-	return body, nil
+	return body, metaTitle(items), nil
 }
 
 // renderMetaTable renders parsed front matter as the key/value table GitHub
@@ -160,17 +168,6 @@ func metaTitle(items yaml.MapSlice) string {
 		}
 	}
 	return ""
-}
-
-// metaTitleOf parses just enough of source to pull the front matter title,
-// without running a full render. Returns "" when absent.
-//
-// v2 splits parse from render, so this no longer has to render the document
-// into a throwaway buffer to get at the metadata.
-func (m *markdownConverter) metaTitleOf(source []byte) string {
-	ctx := parser.NewContext()
-	m.parser.Parse(source, parser.WithContext(ctx))
-	return metaTitle(frontmatter.Items(ctx))
 }
 
 // bufPool reuses the scratch buffer used for markdown rendering. Rendering is

@@ -83,18 +83,32 @@
     return wrap;
   }
 
-  // Builds a folder row. children are produced by build(childrenEl) the first
+  // Builds a folder row: a disclosure toggle and a link, side by side.
+  //
+  // The two are separate controls on purpose. One element can expand a folder
+  // or open it, not both, and with a single control the folder's own page was
+  // unreachable from the tree — only files were links, so a directory could be
+  // browsed into only by editing the URL. Clicking the arrow expands, clicking
+  // the name navigates. children are produced by build(childrenEl) the first
   // time the folder opens, or immediately when `open` is true.
   function folderRow(node, depth, open, build) {
     var wrap = document.createElement("div");
     wrap.className = "tree-item";
 
+    var row = document.createElement("div");
+    row.className = "tree-folder";
+    indent(row, depth);
+
     var btn = document.createElement("button");
-    btn.className = "tree-folder";
+    btn.className = "tree-folder-toggle";
     btn.type = "button";
-    btn.textContent = node.name;
     btn.setAttribute("aria-expanded", open ? "true" : "false");
-    indent(btn, depth);
+    btn.setAttribute("aria-label", (open ? "Collapse " : "Expand ") + node.name);
+
+    var link = document.createElement("a");
+    link.className = "tree-folder-link";
+    link.href = node.path;
+    link.textContent = node.name;
 
     var kids = document.createElement("div");
     kids.className = "tree-children";
@@ -119,9 +133,15 @@
       btn.classList.toggle("collapsed");
       kids.classList.toggle("collapsed");
       btn.setAttribute("aria-expanded", nowOpen ? "true" : "false");
+      btn.setAttribute(
+        "aria-label",
+        (nowOpen ? "Collapse " : "Expand ") + node.name
+      );
     });
 
-    wrap.appendChild(btn);
+    row.appendChild(btn);
+    row.appendChild(link);
+    wrap.appendChild(row);
     wrap.appendChild(kids);
     return wrap;
   }

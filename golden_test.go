@@ -164,7 +164,7 @@ func TestRenderGolden(t *testing.T) {
 
 			for name, src := range syntheticCases {
 				t.Run(name, func(t *testing.T) {
-					got, err := md.convert([]byte(src))
+					got, _, err := md.convert([]byte(src))
 					if err != nil {
 						t.Fatalf("convert: %v", err)
 					}
@@ -178,7 +178,7 @@ func TestRenderGolden(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					got, err := md.convert(src)
+					got, _, err := md.convert(src)
 					if err != nil {
 						t.Fatalf("convert: %v", err)
 					}

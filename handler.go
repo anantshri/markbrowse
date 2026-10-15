@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"io/fs"
@@ -432,23 +433,33 @@ func newNonce() (string, error) {
 func (h *fileHandler) serveDirectory(w http.ResponseWriter, r *http.Request, root *os.Root, dirName, relPath string) {
 	for _, name := range []string{"README.md", "readme.md", "INDEX.md", "index.md"} {
 		indexName := filepath.Join(dirName, name)
-		indexPath := filepath.Join(h.root, indexName)
+
+		// os.Root refuses a candidate that escapes the tree (README.md ->
+		// /etc/passwd), so the escape case needs no check of its own: Stat
+		// simply fails and the loop moves on.
+		info, effective, err := h.statInRoot(root, indexName)
+		if err != nil || info.IsDir() {
+			continue
+		}
+
 		// The candidate may be a symlink into a VCS directory, which os.Root
 		// would happily follow because it stays inside the tree. A rejected
 		// candidate falls through to the listing — a hostile symlink must not
 		// break browsing the directory.
+		//
+		// Four names are tried per directory request and at most one can match,
+		// so resolving only after a candidate exists as a file removes up to
+		// three per-component symlink walks from every directory listing. The
+		// decision is the same one the old order reached, reached later.
+		indexPath := filepath.Join(h.root, indexName)
 		if _, ok := h.resolveContained(indexPath); !ok {
 			continue
 		}
-		// os.Root refuses a candidate that escapes the tree (README.md ->
-		// /etc/passwd), so the escape case needs no check of its own: Stat
-		// simply fails and the loop moves on.
-		if info, effective, err := h.statInRoot(root, indexName); err == nil && !info.IsDir() {
-			// path.Join keeps the root case right: "/" + "README.md" is
-			// "/README.md", not "//README.md".
-			h.serveMarkdown(w, r, root, effective, relPath, path.Join(relPath, name))
-			return
-		}
+
+		// path.Join keeps the root case right: "/" + "README.md" is
+		// "/README.md", not "//README.md".
+		h.serveMarkdown(w, r, root, effective, relPath, path.Join(relPath, name))
+		return
 	}
 
 	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(dirName))
@@ -563,23 +574,13 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, root
 		return
 	}
 
-	body, err := h.md.convert(source)
+	body, metaTitle, err := h.md.convert(source)
 	if err != nil {
 		http.Error(w, "markdown conversion error", http.StatusInternalServerError)
 		return
 	}
 
-	title := filepath.Base(fileName)
-	// Front matter title wins, else the first <h1>, else the filename.
-	if t := h.md.metaTitleOf(source); t != "" {
-		title = t
-	} else if strings.HasPrefix(body, "<h1") {
-		start := strings.Index(body, ">")
-		end := strings.Index(body, "</h1>")
-		if start != -1 && end != -1 && end > start {
-			title = strings.TrimSpace(body[start+1 : end])
-		}
-	}
+	title := docTitle(fileName, metaTitle, body)
 
 	nonce, err := newNonce()
 	if err != nil {
@@ -608,6 +609,36 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, root
 	if err := mdTmpl.Execute(w, data); err != nil {
 		log.Printf("md template error: %v", err)
 	}
+}
+
+// h1Pattern matches the document's first top-level heading and tagPattern
+// strips whatever inline markup it contains.
+var (
+	h1Pattern  = regexp.MustCompile(`(?s)<h1[^>]*>(.*?)</h1>`)
+	tagPattern = regexp.MustCompile(`<[^>]*>`)
+)
+
+// docTitle picks the page title: the front matter "title" wins, else the
+// document's first <h1>, else the file name.
+//
+// The <h1> is searched for anywhere in the body rather than matched at its
+// start. A front matter table is prepended to the rendered body, so a document
+// with front matter but no "title" key begins with <table> — the old prefix
+// test never fired for exactly that case, and the page silently fell back to
+// the file name. The heading's inline markup is stripped so "# A `x`" titles
+// as "A x" rather than as markup with a code tag in it, and entities are
+// decoded because the result is a value, not document markup.
+func docTitle(fileName, metaTitle, body string) string {
+	if metaTitle != "" {
+		return metaTitle
+	}
+	if m := h1Pattern.FindStringSubmatch(body); m != nil {
+		text := tagPattern.ReplaceAllString(m[1], "")
+		if text = strings.TrimSpace(html.UnescapeString(text)); text != "" {
+			return text
+		}
+	}
+	return filepath.Base(fileName)
 }
 
 func (h *fileHandler) css() template.CSS {

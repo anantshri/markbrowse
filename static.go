@@ -118,10 +118,13 @@ body.sidebar-collapsed #sidebar-toggle{left:12px}
 .tree-result+.tree-result{border-top:1px solid var(--borderColor-muted,rgba(209,217,224,.7))}
 .tree-result-path{font-size:11px;color:var(--fgColor-muted,#59636e);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:4px}
 .tree-result .tree-file{padding-top:1px;padding-bottom:5px}
-.tree-folder{display:block;width:100%;text-align:left;background:none;border:none;padding:5px 12px;font-size:14px;font-family:inherit;cursor:pointer;color:var(--fgColor-default,#1f2328);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree-folder{display:flex;align-items:stretch;width:100%;box-sizing:border-box}
 .tree-folder:hover{background:var(--bgColor-neutral-muted,rgba(31,35,40,0.04))}
-.tree-folder::before{content:"\25B6";display:inline-block;width:16px;font-size:10px;transition:transform .15s ease;margin-right:4px;color:var(--fgColor-muted,#59636e)}
-.tree-folder:not(.collapsed)::before{transform:rotate(90deg)}
+.tree-folder-toggle{flex:0 0 20px;width:20px;padding:0;background:none;border:none;cursor:pointer;color:var(--fgColor-muted,#59636e);line-height:1}
+.tree-folder-toggle::before{content:"\25B6";display:inline-block;font-size:10px;transition:transform .15s ease}
+.tree-folder-toggle:not(.collapsed)::before{transform:rotate(90deg)}
+.tree-folder-link{flex:1;min-width:0;padding:5px 12px 5px 0;font-size:14px;color:var(--fgColor-default,#1f2328);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree-folder-link:hover{text-decoration:underline}
 .tree-children.collapsed{display:none}
 .tree-file{display:block;padding:5px 12px;font-size:14px;color:var(--fgColor-accent,#0969da);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tree-file:hover{background:var(--bgColor-neutral-muted,rgba(31,35,40,0.04));text-decoration:underline}

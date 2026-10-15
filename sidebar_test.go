@@ -154,17 +154,32 @@ function populatedFolders() {
   return n;
 }
 
+// Finds the folder row by name and clicks its disclosure toggle, which is what
+// a user does to expand a folder now that the folder's own name is a link.
 function clickFolder(name) {
   var found = null;
   (function walk(nodes) {
     nodes.forEach(function (c) {
-      if (!found && c.className && c.className.indexOf("tree-folder") !== -1 && c.textContent === name) found = c;
+      if (!found && c.className === "tree-folder" && c.textContent === name) found = c;
       if (c.childNodes && c.childNodes.length) walk(c.childNodes);
     });
   })(rootChildren());
   if (!found) throw new Error("no folder named " + name);
-  fire(found, "click");
+  fire(found.firstChild, "click");
   return found;
+}
+
+// Reports the href of every rendered folder link, so the navigation test can
+// assert that a folder's own page is reachable from the tree.
+function folderLinks() {
+  var out = [];
+  (function walk(nodes) {
+    nodes.forEach(function (n) {
+      if (n.className === "tree-folder-link") out.push(n.href || "");
+      if (n.childNodes && n.childNodes.length) walk(n.childNodes);
+    });
+  })(rootChildren());
+  return out;
 }
 `
 
@@ -280,6 +295,40 @@ func TestSidebarRendersLazily(t *testing.T) {
 	}
 	if hasRowText(rows, "buried.md") {
 		t.Errorf("opening guides also rendered its grandchildren: %v", rows)
+	}
+}
+
+// TestSidebarFoldersAreNavigable: a folder row carries a link to the folder's
+// own page, separately from the toggle that expands it. With one control per
+// folder the folder's page was unreachable from the tree — only files linked.
+func TestSidebarFoldersAreNavigable(t *testing.T) {
+	vm := sidebarVM(t, sampleTree(), "/README.md")
+
+	var links []string
+	if err := vm.ExportTo(call(t, vm, "folderLinks"), &links); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"/guides/": false, "/notes/": false}
+	for _, href := range links {
+		if _, ok := want[href]; ok {
+			want[href] = true
+		}
+	}
+	for href, found := range want {
+		if !found {
+			t.Errorf("folder %s is not linked in the tree; links = %v", href, links)
+		}
+	}
+
+	// The toggle still expands, independently of the link.
+	rows := renderedRows(t, vm)
+	if hasRowText(rows, "intro.md") {
+		t.Fatalf("a collapsed folder rendered its children: %v", rows)
+	}
+	call(t, vm, "clickFolder", "guides")
+	rows = renderedRows(t, vm)
+	if !hasRowText(rows, "intro.md") {
+		t.Errorf("toggling the folder did not expand it: %v", rows)
 	}
 }
 

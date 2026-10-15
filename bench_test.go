@@ -52,7 +52,7 @@ func BenchmarkConvert(b *testing.B) {
 	src := []byte("# Title\n\nSome **bold** text with a [link](http://example.com).\n\n> [!NOTE]\n> A callout here.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := md.convert(src); err != nil {
+		if _, _, err := md.convert(src); err != nil {
 			b.Fatal(err)
 		}
 	}
