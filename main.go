@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -97,7 +101,50 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 	log.Printf("markbrowse serving %s on http://%s", rootDir, net.JoinHostPort(displayHost(*listenHost), strconv.Itoa(actualPort)))
-	log.Fatal(srv.Serve(listener))
+
+	// Interrupt and SIGTERM (what a container runtime sends) stop the listener
+	// and let requests already in flight finish, instead of dropping them.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := serve(ctx, srv, listener); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// shutdownGrace bounds how long in-flight requests may take after a signal, so
+// one handler that never returns cannot keep the process alive indefinitely.
+const shutdownGrace = 5 * time.Second
+
+// serve runs srv until ctx is cancelled, then shuts it down and waits for that
+// to finish. Serve reports ErrServerClosed once Shutdown has been called, which
+// is the expected exit rather than a failure.
+func serve(ctx context.Context, srv *http.Server, ln net.Listener) error {
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
+
+	select {
+	case err := <-served:
+		return err
+	case <-ctx.Done():
+	}
+
+	// The grace period deliberately does not derive from ctx: ctx is already
+	// cancelled by the time we are here, so a deadline inherited from it would
+	// be cancelled on arrival and abort the drain before it started.
+	// WithoutCancel keeps the values and drops the cancellation.
+	shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
+	defer cancel()
+
+	if err := srv.Shutdown(shutCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
+	// Listening stopped when Shutdown was called, so Serve has already returned
+	// ErrServerClosed; draining the channel is what proves the goroutine exited.
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // displayHost turns wildcard bind addresses into something a browser can

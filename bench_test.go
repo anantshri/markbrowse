@@ -26,6 +26,25 @@ func BenchmarkTreeBuild(b *testing.B) {
 	}
 }
 
+// BenchmarkTreeBuildWideDir measures a rebuild of a wide directory: many files
+// directly in one folder. A narrow-and-deep tree does not exercise the child
+// lookup, but a wide one does — the old linear scan of a node's children made
+// the build quadratic in the number of siblings, so this is the shape that
+// shows it.
+func BenchmarkTreeBuildWideDir(b *testing.B) {
+	dir := b.TempDir()
+	for i := 0; i < 2000; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("note%04d.md", i)), []byte("# x"), 0o644)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h := &fileHandler{root: dir}
+		if data, _ := h.treeJSONCached(); data == nil {
+			b.Fatal("nil tree")
+		}
+	}
+}
+
 // BenchmarkTreeJSONCached measures repeated tree.json fetches, which is what
 // the sidebar does on every page load. With caching this should be a single
 // mutex + slice read (0 allocs).

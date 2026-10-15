@@ -9,6 +9,109 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-10-16 — Linear tree build, rebuild outside the lock, graceful shutdown, compressed mermaid
+
+**Summary:** The polish-and-efficiency batch from the same review. Behaviour is
+unchanged; the work is wasted effort removed. The headline is a rebuild that was
+quadratic in the width of a directory and is now linear (**2.06× faster** on a
+2,000-file folder), plus four smaller wins and two documentation fixes.
+
+**Quadratic rebuild.** `insertIntoTree` found each path segment by scanning the
+parent's children:
+
+```go
+for j := range current.Children {
+	if current.Children[j].Name == seg {
+		current = &current.Children[j]
+		found = true
+		break
+	}
+}
+```
+
+The walk calls it once per markdown file and once per directory, so every call
+cost one comparison per sibling already present and a rebuild was
+O(files × width). A wide directory is the worst case, and a vault with a flat
+folder of notes is ordinary. `BenchmarkTreeBuildWideDir` was added *before* the
+change so the number would be a measurement rather than an estimate: 2,000 files
+in one folder, **6.19 ms/op**. The existing `BenchmarkTreeBuild` (200
+directories, one file each) was 5.55 ms/op — nearly the same cost for one tenth
+of the files, which is the quadratic term showing through.
+
+`treeBuilder` replaces the function with a `map[string]int` from a node's path
+to its position in the parent's `Children`, making each lookup constant time.
+The `urlPath` parameter turned out to be dead — the function derived every node's
+path from `segments` and never read the argument — so it is gone, along with the
+caller's computation of it.
+
+**Why positions rather than pointers.** The obvious index is
+`map[string]*treeEntry`, and it is wrong. Children live in a slice, so appending
+a sibling can reallocate the backing array, and a pointer cached before that
+reallocation then refers to the old array: writes through it are silently lost,
+producing nodes that never appear in the tree. A position within a given
+parent's slice is stable, because appends only ever add at the end.
+`TestTreeBuilderReusesExistingNodes` pins this specific hazard: it inserts a
+node, forces the slice to grow past 64 siblings, then adds two more children to
+the first node and asserts all three are present.
+
+**Lock held across the rebuild.** `treeJSONCached` took `treeMu` with a `defer`red
+unlock before the walk, so the slowest path in the server ran with the lock held
+and concurrent tree requests queued behind it. The cache is now checked under the
+lock, the lock released, the new `buildTreeJSON` called, and the result swapped in
+under the lock. Two requests racing both build and both store, which is the right
+trade: the payload is identical either way, and the alternative blocks every
+reader for the whole rebuild.
+
+**Abrupt shutdown.** `main` ended in `log.Fatal(srv.Serve(listener))`, so a signal
+killed the process and dropped whatever was in flight. `serve` now runs the
+server and, on cancellation, calls `srv.Shutdown` with a 5-second grace period and
+waits for it; `main` feeds it a context from `signal.NotifyContext` for interrupt
+and `SIGTERM`. `TestServeShutsDownOnContextCancel` uses a client with keep-alives
+disabled, because with a pooled connection the post-shutdown assertion would pass
+without proving anything.
+
+**Uncompressed asset.** `serveAsset` wrote the embedded bytes as-is, and
+`static/js/mermaid.min.js` is 5.4 MB of minified JavaScript fetched in full by any
+page containing a diagram. `gzipAsset` compresses once per URL path on first
+request — not at startup, because most runs never serve that file and would be
+charged for it — and `serveAsset` uses it when the asset is at or above
+`gzipMinBytes` (16 KiB) and the request advertises gzip, with
+`Vary: Accept-Encoding` so an intermediary keys its cache on the encoding. The
+three small scripts fall below the threshold and are served as-is.
+
+**O(n) TOC highlight.** The IntersectionObserver callback cleared `active` from
+every link in the outline and then located the matching link with
+`links.filter(...)[0]`. A heading-to-link `Map` plus one remembered active entry
+makes both constant time.
+
+**Documentation.** The block describing `parentPath` — `path.Dir("/sub") == "/"`
+must stay `"/"` because `"//"` parses as the start of an authority — sat above
+`dirCurrentPath`, leaving `parentPath` undocumented. And
+`.github/workflows/sbom.yml` pointed at `docs/security.md` "for the env-in /
+exit-code-out contract"; no `docs/` directory exists and none was ever deleted.
+The file is now written: threat model, containment (`os.Root`, the deliberately
+loose VCS-name check and why case-insensitive filesystems and 8.3 aliases force
+it), rendering guarantees, what CI runs, and the SBOM/env/exit-code contract read
+out of `scripts/ci/`.
+
+**Testing note.** `toc.js` cannot be unwrapped and tested the way `tablesort.js`
+is: it returns early when there is no outline, and a bare `return` is illegal at
+the top level of a script. Following `sidebar_test.go`, the tests run the file
+as-is against a DOM shim and fire the captured IntersectionObserver callback.
+`tocVM` asserts exactly one observer was registered, so a renamed or
+restructured `toc.js` fails loudly rather than passing vacuously.
+
+**Evidence.** Benchmarks before and after are in the PR. `go test ./...` passes
+with eight new or updated tests, each confirmed to run. Scanners: gosec 0,
+semgrep 0, gitleaks 0 leaks.
+
+**Deliberately not done.** `gopkg.in/yaml.v2` is deprecated and v3 is current,
+but front matter key order is preserved through `yaml.MapSlice`, which v3 does
+not have; migrating needs a custom `yaml.Node` decode to keep the rendered table
+in document order. That is a change of its own, not a rider on this one.
+
+---
+
 ## 2026-09-20 — os.Root containment, from GitHub code scanning on PR #21
 
 **Summary:** CodeQL (`go/path-injection`, "This path depends on a

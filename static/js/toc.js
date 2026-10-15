@@ -29,6 +29,12 @@
 
   var links = [];
 
+  // Heading element -> its outline link, so an intersection resolves in constant
+  // time instead of scanning every link, plus the entry currently highlighted, so
+  // a new one clears that entry rather than every link in the document.
+  var linkForHeading = new Map();
+  var activeLink = null;
+
   function build() {
     // Stack of current open <details> elements per heading level.
     var stack = [];
@@ -65,6 +71,7 @@
       }
       stack.push({ level: level, node: details });
       links.push({ anchor: a, heading: h });
+      linkForHeading.set(h, a);
     });
 
     container.appendChild(root);
@@ -75,9 +82,11 @@
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (!entry.isIntersecting) return;
-        links.forEach(function (l) { l.anchor.classList.remove("active"); });
-        var match = links.filter(function (l) { return l.heading === entry.target; })[0];
-        if (match) match.anchor.classList.add("active");
+        var next = linkForHeading.get(entry.target);
+        if (!next || next === activeLink) return;
+        if (activeLink) activeLink.classList.remove("active");
+        next.classList.add("active");
+        activeLink = next;
       });
     }, { rootMargin: "0px 0px -70% 0px" });
     links.forEach(function (l) { io.observe(l.heading); });

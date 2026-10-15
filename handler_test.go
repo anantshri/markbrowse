@@ -145,17 +145,59 @@ func TestSortTree(t *testing.T) {
 
 func TestInsertIntoTree(t *testing.T) {
 	root := treeEntry{Name: "root", Path: "/", IsDir: true}
-	insertIntoTree(&root, []string{"sub", "file.md"}, "/sub/file.md", false)
+	newTreeBuilder(&root).insert([]string{"sub", "file.md"}, false)
 
 	if len(root.Children) != 1 {
-		t.Fatalf("insertIntoTree: got %d children, want 1", len(root.Children))
+		t.Fatalf("insert: got %d children, want 1", len(root.Children))
 	}
 	sub := root.Children[0]
 	if sub.Name != "sub" || !sub.IsDir {
-		t.Errorf("insertIntoTree: sub = {%q, isDir=%v}, want {sub, true}", sub.Name, sub.IsDir)
+		t.Errorf("insert: sub = {%q, isDir=%v}, want {sub, true}", sub.Name, sub.IsDir)
 	}
 	if len(sub.Children) != 1 || sub.Children[0].Name != "file.md" {
-		t.Errorf("insertIntoTree: sub children = %v, want [file.md]", sub.Children)
+		t.Errorf("insert: sub children = %v, want [file.md]", sub.Children)
+	}
+	if sub.Path != "/sub/" || sub.Children[0].Path != "/sub/file.md" {
+		t.Errorf("insert: paths = %q / %q, want /sub/ and /sub/file.md", sub.Path, sub.Children[0].Path)
+	}
+}
+
+// TestTreeBuilderReusesExistingNodes guards the index across the backing-array
+// reallocation that adding siblings causes. A node found through the index must
+// be the node later inserts extend, not a stale copy left behind in the old
+// array — which is exactly what caching *treeEntry pointers would have produced.
+func TestTreeBuilderReusesExistingNodes(t *testing.T) {
+	root := treeEntry{Name: "root", Path: "/", IsDir: true}
+	b := newTreeBuilder(&root)
+
+	b.insert([]string{"a", "1.md"}, false)
+	// Enough siblings to force the children slice to grow and reallocate.
+	for i := 0; i < 64; i++ {
+		b.insert([]string{fmt.Sprintf("s%02d", i)}, true)
+	}
+	b.insert([]string{"a", "2.md"}, false)
+	b.insert([]string{"a", "3.md"}, false)
+
+	var sub *treeEntry
+	for i := range root.Children {
+		if root.Children[i].Name == "a" {
+			sub = &root.Children[i]
+		}
+	}
+	if sub == nil {
+		t.Fatal("no child named \"a\"")
+	}
+	if len(sub.Children) != 3 {
+		t.Fatalf("a has %d children, want 3: %v", len(sub.Children), sub.Children)
+	}
+	want := []string{"1.md", "2.md", "3.md"}
+	for i, name := range want {
+		if sub.Children[i].Name != name {
+			t.Errorf("a.Children[%d] = %q, want %q", i, sub.Children[i].Name, name)
+		}
+	}
+	if sub.Path != "/a/" || sub.Children[0].Path != "/a/1.md" {
+		t.Errorf("paths = %q / %q, want /a/ and /a/1.md", sub.Path, sub.Children[0].Path)
 	}
 }
 

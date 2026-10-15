@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `docs/security.md`: the threat model, containment and rendering guarantees, the
+  checks CI runs, and the SBOM/license pipeline contract. `.github/workflows/sbom.yml`
+  referred to this file and it did not exist.
+
+### Changed
+- **Sidebar tree rebuilds are linear, not quadratic.** Every node was found by
+  scanning its parent's children, which made a rebuild quadratic in the width of
+  a directory. An index of node positions makes each lookup constant time:
+  `BenchmarkTreeBuildWideDir` (2,000 files in one folder) went from 6.19 ms to
+  3.00 ms per rebuild.
+- **The tree rebuild no longer holds the cache lock.** It is the most expensive
+  thing the server does, and holding `treeMu` across it serialised every
+  concurrent sidebar request behind a single walk. The rebuild now runs outside
+  the lock and the result is swapped in under it.
+- **The mermaid bundle is compressed in transit.** 5.4 MB of minified JavaScript
+  was sent in full to every page containing a diagram; it is now gzipped when the
+  client accepts gzip, with `Vary: Accept-Encoding`. The three small scripts sit
+  below the threshold and are still sent as-is.
+- **The server shuts down gracefully.** Interrupt and `SIGTERM` now stop the
+  listener and let requests already in flight finish, instead of dropping them.
+- **The table of contents highlights in constant time.** The entry for a heading
+  was found by scanning every link, and every link was cleared before the new one
+  was marked; only the entry being replaced is cleared now.
+
+### Fixed
+- A doc comment describing `parentPath` sat above `dirCurrentPath`, leaving
+  `parentPath` itself undocumented.
+
 ## [0.4.0] - 2026-09-20
 
 ### Added
