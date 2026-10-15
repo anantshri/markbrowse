@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Stale assets and pages after an upgrade.** The embedded scripts were served
+  with `Cache-Control: public, max-age=86400` from URLs fixed at compile time,
+  and markdown ETags were derived from the file on disk alone. A new binary
+  therefore kept running the previous build's JavaScript, and kept showing the
+  previous build's rendering of an unchanged document, for up to a day. Assets
+  now revalidate (`no-cache` plus a build-identity ETag) from a per-start
+  versioned URL, and page ETags carry the build identity alongside the file's.
+
+### Removed
+- `markbrowse.exe`, a 16 MB Windows build artifact committed by accident in
+  `0a186d7`. `*.exe` is now ignored, so it cannot come back.
+
 ## [0.4.0] - 2026-09-20
 
 ### Added

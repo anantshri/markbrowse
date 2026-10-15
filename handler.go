@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -238,22 +239,22 @@ func (h *fileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fsPath := filepath.Join(h.root, relPath[1:])
 
 	if relPath == "/__mdview/mermaid.js" {
-		serveAsset(w, "application/javascript", mermaidJS)
+		serveAsset(w, r, "application/javascript", mermaidJS)
 		return
 	}
 
 	if relPath == "/__mdview/sidebar.js" {
-		serveAsset(w, "application/javascript", sidebarJS)
+		serveAsset(w, r, "application/javascript", sidebarJS)
 		return
 	}
 
 	if relPath == "/__mdview/tablesort.js" {
-		serveAsset(w, "application/javascript", tablesortJS)
+		serveAsset(w, r, "application/javascript", tablesortJS)
 		return
 	}
 
 	if relPath == "/__mdview/toc.js" {
-		serveAsset(w, "application/javascript", tocJS)
+		serveAsset(w, r, "application/javascript", tocJS)
 		return
 	}
 
@@ -546,7 +547,11 @@ func (h *fileHandler) serveMarkdown(w http.ResponseWriter, r *http.Request, root
 
 	// ETag from file identity lets browsers revalidate cheaply and lets us
 	// short-circuit with 304 without re-reading/re-rendering unchanged files.
-	etag := fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size())
+	// serverID is part of it because the rendered page depends on the running
+	// build's templates and stylesheet as much as on the file itself: without
+	// it, a new binary would keep answering 304 for an unchanged document and
+	// the browser would keep showing the previous build's rendering.
+	etag := fmt.Sprintf(`"%s-%x-%x"`, serverID, info.ModTime().UnixNano(), info.Size())
 	if match := r.Header.Get("If-None-Match"); match == etag {
 		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusNotModified)
@@ -780,13 +785,32 @@ func (h *fileHandler) serveTreeJSON(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// serverID identifies the running build. The assets and the templates that
+// link to them are compiled in, so a restart is precisely when a browser's
+// cached copy of either may no longer match what the process now serves.
+var serverID = strconv.FormatInt(time.Now().UnixNano(), 36)
+
 // serveAsset writes an embedded static asset. These are go:embed'd files
 // compiled into the binary, not user input.
 //
+// Assets are served from stable URLs (/__mdview/sidebar.js), so the previous
+// public,max-age=86400 meant an upgraded binary kept running the old script
+// against the new build's pages for the rest of the window. Revalidation
+// replaces it: the ETag is the serverID, which changes on restart, so a new
+// build invalidates every cached asset while an unchanged one still costs
+// only a 304. Templates additionally stamp ?v=<serverID> onto each script
+// URL, which makes a stale copy unreachable rather than merely revalidated.
+//
 // nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- assets are build-time embedded, never request-derived
-func serveAsset(w http.ResponseWriter, contentType string, asset []byte) {
+func serveAsset(w http.ResponseWriter, r *http.Request, contentType string, asset []byte) {
+	etag := `"` + serverID + `"`
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
 	// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- asset is compile-time embedded bytes
 	_, _ = w.Write(asset)
 }

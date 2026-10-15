@@ -2,6 +2,9 @@
 markbrowse
 /mdview
 /markbrowse
+# Windows build output. The bare name was covered, markbrowse.exe was not —
+# a release build of the Windows target once landed in a commit.
+*.exe
 
 # Plans (out of scope)
 plans/

@@ -9,6 +9,66 @@ below; drop sections that genuinely don't apply.
 
 ---
 
+## 2026-10-16 — Upgrade staleness: build-identity cache keys, and a committed `.exe`
+
+**Summary:** Two findings from a whole-code review, fixed together because both
+are about a build's output outliving the build. A 16 MB `markbrowse.exe` was
+tracked in git, and upgrading the binary left browsers running the previous
+build's JavaScript and showing the previous build's rendering. Assets and page
+ETags now carry a build identity, and the `.exe` is gone and ignored.
+
+**The committed binary.** `git ls-files` listed `markbrowse.exe` at 16,207 KB.
+`git log --diff-filter=A -- markbrowse.exe` blamed `0a186d7` ("Skip
+permission-denial tests on Windows CI") — a local release build of the Windows
+target that was swept up by a broad `git add`. `.gitignore` covered
+`markbrowse` and `/mdview` but not the `.exe` variant, so nothing caught it. It
+was removed from the index (`git rm --cached`, so the working copy is
+untouched) and `*.exe` added to `.gitignore`. History is left alone: the object
+is already in every clone, and rewriting published history is a heavier
+decision than the 16 MB is worth.
+
+**The stale-asset half.** `serveAsset` sent `Cache-Control: public,
+max-age=86400` for `/__mdview/{mermaid,sidebar,tablesort,toc}.js`. Those paths
+are fixed at compile time, so a browser treats the old build's script and the
+new build's script as the same resource and, for 24 hours after an upgrade,
+runs the old script against new pages. `serveAsset` now takes the request,
+sends `no-cache` with an `ETag` equal to a new package-level `serverID`
+(nanotime, base-36, fixed for the process), and answers `304` on a matching
+`If-None-Match`. An unchanged build therefore pays one cheap revalidation per
+asset; a new build invalidates all of them at once.
+
+**The versioned-URL half.** Revalidation alone still leaves the URL shared
+between builds, which is enough for a proxy or service worker holding a copy to
+serve a stale script without ever revalidating. Both templates gained an
+`assetFuncs` FuncMap that stamps `?v={{v}}` (`serverID`) onto every script
+`src`, so the URL a previous build cached is not a URL this build serves. The
+two halves are deliberate: `?v=` makes a stale copy unreachable, the ETag keeps
+the unchanged case free.
+
+**The stale-render half.** The markdown ETag was
+`fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size())` — the file on
+disk and nothing else. The rendered page also depends on the running build's
+templates and stylesheet, so after an upgrade an unchanged document still
+matched and the server answered `304`, pinning the browser to the old
+rendering for as long as it kept the entry. The ETag is now
+`"<serverID>-<mtime>-<size>"`.
+
+**Evidence.** `gosec ./...` (v2.29.0, matching CI): 9 files / 2608 lines → 0
+issues. `gitleaks detect`: 50 commits, 1.27 MB → no leaks. `semgrep --config
+auto` over the Go sources: no findings. `go test -cover ./...`: main package
+84.5%, `serveAsset` 100.0%. Three new tests in `cache_test.go` —
+`TestServeAssetRevalidates` (200 + `no-cache` + build-identity ETag, then 304,
+then a foreign ETag that must *not* revalidate),
+`TestMarkdownETagIncludesBuildIdentity`, and `TestPagesVersionScriptURLs` (both
+templates). All fail against the previous behaviour.
+
+**Notes.** `serveAsset`'s revalidation and the template's `?v=` are one design
+in two places, which is why they are in one change. The 5.4 MB uncompressed
+mermaid bundle is a separate finding: it edits the same function, so it is kept
+out of this change to avoid a self-conflict, and is tracked with the P3 batch.
+
+---
+
 ## 2026-09-20 — os.Root containment, from GitHub code scanning on PR #21
 
 **Summary:** CodeQL (`go/path-injection`, "This path depends on a

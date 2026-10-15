@@ -37,7 +37,7 @@ type dirData struct {
 	CurrentPath string
 }
 
-var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
+var mdTmpl = template.Must(template.New("markdown").Funcs(assetFuncs).Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -66,20 +66,20 @@ var mdTmpl = template.Must(template.New("markdown").Parse(`<!DOCTYPE html>
 <article class="markdown-body">
 {{.Body}}
 </article>
-{{if .HasMermaid}}<script src="/__mdview/mermaid.js"></script>
+{{if .HasMermaid}}<script src="/__mdview/mermaid.js?v={{v}}"></script>
 <script nonce="{{.Nonce}}">mermaid.initialize({startOnLoad:false,securityLevel:"strict"});mermaid.run();</script>{{end}}
 </div>
 </main>
 <nav class="mdview-toc" id="toc-root" aria-label="Table of contents"></nav>
 <button id="toc-toggle" title="Toggle table of contents">&#187;</button>
 </div>
-<script src="/__mdview/sidebar.js"></script>
-<script src="/__mdview/tablesort.js"></script>
-<script src="/__mdview/toc.js"></script>
+<script src="/__mdview/sidebar.js?v={{v}}"></script>
+<script src="/__mdview/tablesort.js?v={{v}}"></script>
+<script src="/__mdview/toc.js?v={{v}}"></script>
 </body>
 </html>`))
 
-var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
+var dirTmpl = template.Must(template.New("dirlist").Funcs(assetFuncs).Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -118,7 +118,12 @@ var dirTmpl = template.Must(template.New("dirlist").Parse(`<!DOCTYPE html>
 </div>
 </main>
 </div>
-<script src="/__mdview/sidebar.js"></script>
-<script src="/__mdview/tablesort.js"></script>
+<script src="/__mdview/sidebar.js?v={{v}}"></script>
+<script src="/__mdview/tablesort.js?v={{v}}"></script>
 </body>
 </html>`))
+
+// assetFuncs gives each script URL a per-start version, so a browser that kept
+// the previous build's copy cannot serve it against the new build's pages: the
+// URL it cached no longer exists. See serveAsset for the revalidation half.
+var assetFuncs = template.FuncMap{"v": func() string { return serverID }}
