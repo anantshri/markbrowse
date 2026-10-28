@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/dop251/goja v0.0.0-20260917113740-793a2a65c13b
-	github.com/yuin/goldmark/v2 v2.1.5
+	github.com/yuin/goldmark/v2 v2.1.9
 	gopkg.in/yaml.v2 v2.4.0
 )
 
